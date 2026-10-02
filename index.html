@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Raid Over Moscow II</title>
+  <meta name="description" content="A 2.5D fan remake of the 1984 Commodore 64 classic Raid Over Moscow. Launch from the space station, fly low across Soviet territory, destroy the launch sites and storm the Kremlin." />
+  <meta name="theme-color" content="#0b1220" />
+  <meta property="og:title" content="Raid Over Moscow II — 2.5D remake" />
+  <meta property="og:description" content="Hangar launch, low-level flight, silo strikes, Red Square and the reactor room — rebuilt in 2.5D for the browser." />
+  <meta property="og:image" content="https://robertorenz.github.io/RaidoverMoscow2/docs/screenshots/flight.png" />
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <main id="stage-shell">
+    <div id="wrap">
+      <canvas id="game" width="960" height="540" aria-label="Raid Over Moscow II game screen"></canvas>
+
+      <!-- touch controls -->
+      <div id="touch" aria-hidden="true">
+        <div class="pad">
+          <button data-key="up" class="t-up">▲</button>
+          <button data-key="left" class="t-left">◀</button>
+          <button data-key="right" class="t-right">▶</button>
+          <button data-key="down" class="t-down">▼</button>
+        </div>
+        <div class="acts">
+          <button data-key="bomb" class="t-bomb">BOMB</button>
+          <button data-key="fire" class="t-fire">FIRE</button>
+        </div>
+        <div class="sys">
+          <button id="t-pause" class="t-sys">❚❚</button>
+          <button id="t-mute" class="t-sys">🔊</button>
+        </div>
+      </div>
+
+      <!-- TITLE -->
+      <section class="modal title-modal" id="m-title" role="dialog" aria-labelledby="logo">
+        <div class="title-card">
+          <div class="kicker">A 2.5D TRIBUTE TO THE 1984 C64 CLASSIC</div>
+          <h1 id="logo">Raid Over Moscow <span>II</span></h1>
+          <p class="tag">Launch. Fly low. Strike the silos. Storm the Kremlin.</p>
+          <div class="menu">
+            <button id="btn-start" class="btn primary" data-focus>Start Campaign</button>
+            <button id="btn-select" class="btn">Stage Select</button>
+            <button id="btn-help" class="btn">How to Play</button>
+          </div>
+          <div class="settings">
+            <div class="seg" role="group" aria-label="Difficulty">
+              <button class="seg-btn" data-diff="0">Cadet</button>
+              <button class="seg-btn" data-diff="1">Pilot</button>
+              <button class="seg-btn" data-diff="2">Ace</button>
+            </div>
+            <button id="btn-mute" class="btn ghost small">Sound: On</button>
+          </div>
+          <div class="hiscore">High score <b id="title-hi">0</b></div>
+        </div>
+      </section>
+
+      <!-- HELP -->
+      <section class="modal" id="m-help" role="dialog" aria-labelledby="help-h">
+        <div class="card wide">
+          <h2 id="help-h">Flight Manual</h2>
+          <div class="help-grid">
+            <div>
+              <h3>Controls</h3>
+              <table class="keys">
+                <tr><td><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd></td><td>Steer / move</td></tr>
+                <tr><td><kbd>↑</kbd><kbd>↓</kbd> / <kbd>W</kbd><kbd>S</kbd></td><td>Climb / dive · set range</td></tr>
+                <tr><td><kbd>Space</kbd> / <kbd>J</kbd></td><td>Fire · throttle · throw</td></tr>
+                <tr><td><kbd>X</kbd> / <kbd>Shift</kbd></td><td>Drop bomb (flight)</td></tr>
+                <tr><td><kbd>P</kbd> / <kbd>Esc</kbd></td><td>Pause</td></tr>
+                <tr><td><kbd>M</kbd></td><td>Mute</td></tr>
+              </table>
+              <p class="muted">Gamepads and touch screens are supported.</p>
+            </div>
+            <div>
+              <h3>The Raid</h3>
+              <ol class="phases">
+                <li><b>Hangar Launch</b> — throttle up, lift off and thread the bay door as it cycles.</li>
+                <li><b>Low-Level Flight</b> — stay under the red radar floor. Climb too long and MiGs scramble and SAMs launch. Watch for trees, power lines and tower blocks.</li>
+                <li><b>Launch Site Strike</b> — the Control Center's roof hatches are only vulnerable while open. Shoot rising ICBMs before they launch, or a US city is lost.</li>
+                <li><b>Red Square</b> — set rocket range with ↑/↓ and blast the five bunker doors.</li>
+                <li><b>Reactor Room</b> — the robot's shield reflects straight throws. Move while throwing to bank discs off the walls.</li>
+              </ol>
+            </div>
+          </div>
+          <div class="actions"><button id="btn-help-back" class="btn primary" data-focus>Back</button></div>
+        </div>
+      </section>
+
+      <!-- STAGE SELECT -->
+      <section class="modal" id="m-select" role="dialog" aria-labelledby="sel-h">
+        <div class="card wide">
+          <h2 id="sel-h">Stage Select <small>practice any stage</small></h2>
+          <div id="select-grid" class="select-grid"></div>
+          <div class="actions"><button id="btn-select-back" class="btn" data-focus>Back</button></div>
+        </div>
+      </section>
+
+      <!-- BRIEFING -->
+      <section class="modal" id="m-brief" role="dialog" aria-labelledby="brief-title">
+        <div class="card brief">
+          <div class="kicker" id="brief-kicker">MISSION 1</div>
+          <h2 id="brief-title">Leningrad</h2>
+          <div class="sub" id="brief-sub"></div>
+          <p id="brief-text"></p>
+          <ol id="brief-steps" class="steps"></ol>
+          <div class="hint"><span>Tip</span><p id="brief-hint"></p></div>
+          <div class="actions">
+            <button id="btn-brief-quit" class="btn ghost">Abort</button>
+            <button id="btn-brief-go" class="btn primary" data-focus>Launch ▸</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PAUSE -->
+      <section class="modal" id="m-pause" role="dialog" aria-labelledby="pause-h">
+        <div class="card narrow">
+          <h2 id="pause-h">Paused</h2>
+          <div class="menu">
+            <button id="btn-resume" class="btn primary" data-focus>Resume</button>
+            <button id="btn-quit" class="btn">Quit to Title</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- GAME OVER / PRACTICE RESULT -->
+      <section class="modal" id="m-over" role="dialog" aria-labelledby="over-title">
+        <div class="card narrow">
+          <h2 id="over-title">Mission Failed</h2>
+          <p id="over-why" class="muted"></p>
+          <dl class="stats">
+            <dt>Score</dt><dd id="over-score">0</dd>
+            <dt>High score</dt><dd id="over-hi">0</dd>
+            <dt>Reached</dt><dd id="over-reached">—</dd>
+          </dl>
+          <div class="actions">
+            <button id="btn-over-title" class="btn ghost">Title</button>
+            <button id="btn-over-retry" class="btn primary" data-focus>New Campaign</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- VICTORY -->
+      <section class="modal" id="m-win" role="dialog" aria-labelledby="win-h">
+        <div class="card narrow win">
+          <div class="kicker">THE LAUNCH NETWORK IS DOWN</div>
+          <h2 id="win-h">Mission Accomplished</h2>
+          <p class="muted">The reactor beneath the Kremlin is gone and the remaining missiles will never fly.</p>
+          <dl class="stats">
+            <dt>US cities saved</dt><dd id="win-cities">6 / 6</dd>
+            <dt>Survival bonus</dt><dd id="win-bonus">0</dd>
+            <dt>Final score</dt><dd id="win-score">0</dd>
+            <dt>High score</dt><dd id="win-hi">0</dd>
+          </dl>
+          <div class="actions"><button id="btn-win-title" class="btn primary" data-focus>Return to Title</button></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="js/util.js"></script>
+  <script src="js/render3d.js"></script>
+  <script src="js/models.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/stages/hangar.js"></script>
+  <script src="js/stages/flight.js"></script>
+  <script src="js/stages/silo.js"></script>
+  <script src="js/stages/kremlin.js"></script>
+  <script src="js/stages/reactor.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
