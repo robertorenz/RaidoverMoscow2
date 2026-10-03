@@ -222,6 +222,31 @@
       this.state = 'attract';
     },
 
+    /* start menu: choose Remastered or the original 1984 mode */
+    toModeSelect() {
+      this.closeModals();
+      if (!this.stage || this.stage.classic || this.state !== 'attract') this.startAttract();
+      this.openModal('m-mode');
+      A.music('title');
+    },
+    startClassic(opts) {
+      opts = opts || {};
+      this.closeModals();
+      this.attract = false;
+      this.god = !!opts.god;
+      this.campaign = null;
+      A.engine(false);
+      this.stage = new ROM.Classic(this, opts);
+      this.state = opts.shot ? 'shot' : 'play';
+      this.intro = 0;
+      this.banners = [];
+      this.fade = 1; this.fadeTarget = 0;
+    },
+    quit() {
+      if (this.stage && this.stage.classic) this.toModeSelect();
+      else this.toTitle();
+    },
+
     toTitle() {
       this.closeModals();
       this.startAttract();
@@ -255,7 +280,7 @@
       this.time += dt;
       I.pollPad();
       if (I.hit('mute')) { A.setMuted(!A.muted); this.syncMute(); }
-      if (this.state === 'play' && I.hit('pause')) { this.pause(); }
+      if (this.state === 'play' && I.hit('pause')) { if (!(this.stage && this.stage.onPause && this.stage.onPause())) this.pause(); }
       else if (this.state === 'paused' && I.hit('pause')) { this.resume(); }
       // fade
       if (this.fadeTarget > this.fade) {
@@ -286,7 +311,7 @@
         ctx.fillStyle = `rgba(255,255,240,${this.stage.fx.flash * 0.7})`;
         ctx.fillRect(0, 0, ROM.W, ROM.H);
       }
-      const showHud = !this.hideHud && (this.state === 'play' || this.state === 'paused' || this.state === 'shot');
+      const showHud = !this.hideHud && !(this.stage && this.stage.classic) && (this.state === 'play' || this.state === 'paused' || this.state === 'shot');
       if (showHud) this.drawHUD(ctx);
       if (this.state === 'play' && this.intro > 0) this.drawIntro(ctx);
       if (showHud || this.state === 'attract') this.drawBanners(ctx);
@@ -471,7 +496,13 @@
     wireUI();
 
     const P = ROM.params;
-    if (P.shot) {
+    if (P.classic) {
+      Game.startClassic({ level: P.classic, mission: parseInt(P.m || '0', 10), god: true, shot: true });
+      Game.stage.score = parseInt(P.score || '23450', 10);
+      const pre = parseFloat(P.t || '5');
+      for (let t = 0; t < pre; t += 1 / 60) Game.update(1 / 60);
+      Game.fade = 0; Game.fadeTarget = 0;
+    } else if (P.shot) {
       // screenshot / demo mode: jump straight into a stage on autopilot
       Game.diffIdx = 1;
       Game.startAttract({ mission: parseInt(P.m || '0', 10), phase: P.shot, startY: P.y ? -parseFloat(P.y) : 0 });
@@ -485,7 +516,7 @@
       for (let t = 0; t < pre; t += 1 / 60) Game.update(1 / 60);
       Game.fade = 0; Game.fadeTarget = 0;
     } else {
-      Game.toTitle();
+      if (P.menu === 'title') Game.toTitle(); else Game.toModeSelect();
       if (P.m !== undefined) Game.startAttract({ mission: parseInt(P.m, 10), phase: 'flight' });
       const pre = parseFloat(P.t || '0');
       for (let t = 0; t < pre; t += 1 / 60) Game.update(1 / 60);
@@ -516,7 +547,10 @@
     click('btn-brief-go', () => Game.startPhase());
     click('btn-brief-quit', () => Game.toTitle());
     click('btn-resume', () => Game.resume());
-    click('btn-quit', () => Game.toTitle());
+    click('btn-quit', () => Game.quit());
+    click('btn-mode-remaster', () => Game.toTitle());
+    click('btn-mode-classic', () => Game.startClassic());
+    click('btn-to-mode', () => Game.toModeSelect());
     click('btn-over-title', () => Game.toTitle());
     click('btn-over-retry', () => Game.startCampaign());
     click('btn-win-title', () => Game.toTitle());
@@ -541,8 +575,9 @@
         const n = e.code === 'ArrowDown' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
         if (btns[n]) { btns[n].focus(); e.preventDefault(); }
       }
-      if (e.code === 'Escape' && open.id !== 'm-title' && open.id !== 'm-pause' && Game.state !== 'play') {
+      if (e.code === 'Escape' && open.id !== 'm-pause' && open.id !== 'm-mode' && Game.state !== 'play') {
         if (open.id === 'm-help' || open.id === 'm-select') Game.openModal('m-title');
+        else if (open.id === 'm-title') Game.toModeSelect();
       }
     });
 

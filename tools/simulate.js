@@ -1,6 +1,7 @@
 /* Headless campaign simulator: plays the whole game on autopilot against a
    mock canvas to verify stage flow and catch runtime errors.
-   usage: node tools/simulate.js [difficulty 0-2] [god 0/1] [mission 0-4] [phase] */
+   usage: node tools/simulate.js [difficulty 0-2] [god 0/1] [mission 0-4] [phase]
+          node tools/simulate.js classic [skill 0-2] [god 0/1]   (1984 mode) */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -27,17 +28,21 @@ const sandbox = {
   URLSearchParams,
   navigator: {},
   localStorage: { getItem: () => null, setItem() {} },
-  document: { getElementById: () => stubEl(), querySelectorAll: () => [], querySelector: () => null, body: stubEl() },
+  document: {
+    getElementById: () => stubEl(), querySelectorAll: () => [], querySelector: () => null, body: stubEl(),
+    createElement: () => ({ width: 0, height: 0, getContext: () => ctx }),
+  },
 };
 const pending = [];
 sandbox.window = sandbox;
 sandbox.addEventListener = () => {};
 vm.createContext(sandbox);
-const files = ['util', 'render3d', 'models', 'fx', 'audio', 'stages/hangar', 'stages/flight', 'stages/silo', 'stages/kremlin', 'stages/reactor', 'game'];
+const files = ['util', 'render3d', 'models', 'fx', 'audio', 'stages/hangar', 'stages/flight', 'stages/silo', 'stages/kremlin', 'stages/reactor', 'classic', 'game'];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8'), sandbox, { filename: f + '.js' });
 
 const ROM = sandbox.ROM, G = ROM.Game;
 ROM.R.ctx = ctx;
+if (process.argv[2] === 'classic') { runClassic(); process.exit(0); }
 G.diffIdx = parseInt(process.argv[2] || '1', 10);
 if (process.argv[4]) { G.startPractice(parseInt(process.argv[4], 10), process.argv[5]); G.campaign.practice = false; } else G.startCampaign();
 G.campaign.planes = 60;
@@ -63,3 +68,30 @@ while (t < 60 * 60) {
 }
 console.log(log.join('\n'));
 console.log(`final state=${G.state} t=${t.toFixed(0)}s score=${G.campaign.score} deaths=${deaths} cities lost=${40 - G.campaign.cities.length}`);
+
+function runClassic() {
+  G.startClassic({ god: process.argv[4] === '1' });
+  const K = G.stage;
+  K.skill = parseInt(process.argv[3] || '1', 10);
+  G.autoplay = true;
+  const dt = 1 / 60;
+  let t = 0, key = '', phaseT = 0, deaths = 0;
+  const out = [];
+  const die = K.die.bind(K);
+  K.die = (g) => { deaths++; out.push(`  x died in ${K.levelName} t=${t.toFixed(1)}`); die(g); };
+  while (t < 3600) {
+    if (K.scr === 'title') { K.newGame(); K.planes = 60; K.cities = Array(30).fill('TESTVILLE'); K.scr = 'map'; }
+    if (K.scr === 'map') { K.after = 'flight'; K.startLevel('hangar'); }
+    if (K.scr === 'over' || K.scr === 'win') break;
+    G.update(dt);
+    while (pending.length) pending.shift()();
+    if (Math.round(t * 60) % 20 === 0) G.draw(ctx);
+    const k2 = K.target + ':' + (K.scr === 'level' ? K.levelName : K.scr);
+    if (K.scr === 'level' && k2 !== key) { out.push(`[${t.toFixed(1)}s] ${K.tgt().name} -> ${K.levelName} (score ${K.score})`); key = k2; phaseT = 0; }
+    phaseT += dt;
+    if (phaseT > 600) { out.push('!! stuck in ' + k2); break; }
+    t += dt;
+  }
+  console.log(out.join('\n'));
+  console.log(`classic final scr=${K.scr} t=${t.toFixed(0)}s score=${K.score} deaths=${deaths} cities lost=${30 - K.cities.length}`);
+}

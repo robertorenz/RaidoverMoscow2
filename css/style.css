@@ -80,6 +80,19 @@ canvas#game { display: block; width: 100%; height: 100%; background: #0b1220; im
 .hiscore { margin-top: 18px; color: var(--muted); font-family: Rajdhani, sans-serif; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.9em; }
 .hiscore b { color: var(--text); font-size: 1.25em; margin-left: 6px; }
 
+.mode-modal { background: radial-gradient(ellipse at center, rgba(7, 11, 18, 0.55) 0%, rgba(7, 11, 18, 0.9) 100%); }
+.mode-wrap { width: min(calc(860px * var(--ui-scale)), 100%); text-align: center; font-size: calc(14px * var(--ui-scale)); animation: rise 0.4s ease-out; }
+.mode-logo { font-family: "Black Ops One", sans-serif; font-weight: 400; font-size: 3em; margin: 8px 0 4px; color: #f4f6f8; text-shadow: 0 3px 0 #000; }
+.mode-logo span { color: var(--amber); }
+.mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: calc(16px * var(--ui-scale)); margin-top: 18px; }
+.mode-card { display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 6px; padding: 10px 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; color: var(--text); cursor: pointer; font: inherit; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.mode-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; border: 1px solid #1a2536; background: #0b1220; }
+.mode-card:hover, .mode-card:focus-visible { border-color: var(--amber); transform: translateY(-2px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); outline: none; }
+.mode-card.classic:hover, .mode-card.classic:focus-visible { border-color: var(--steel); }
+.mode-name { font-family: Rajdhani, sans-serif; font-weight: 700; font-size: 1.35em; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 4px; }
+.mode-card.classic .mode-name { font-family: "Press Start 2P", monospace; font-size: 0.8em; line-height: 1.6; color: var(--steel); text-transform: none; }
+.mode-desc { color: var(--muted); padding: 0 4px; line-height: 1.4; }
+
 /* ---------- briefing ---------- */
 .brief p { color: #c7d3df; line-height: 1.5; }
 .steps { list-style: none; padding: 0; margin: 14px 0; display: flex; gap: 6px; flex-wrap: wrap; }
@@ -135,6 +148,12 @@ body.touch #touch { display: block; }
 .sys button { width: 38px; height: 38px; border-radius: 8px !important; }
 
 @media (max-width: 700px) {
+  .mode-grid { grid-template-columns: 1fr; }
+  .mode-card img { display: none; }
   .help-grid { grid-template-columns: 1fr; }
   #logo { font-size: 2.6em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.open, .card, .title-card, .mode-wrap { animation: none; }
 }

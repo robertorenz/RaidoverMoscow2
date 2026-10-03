@@ -12,7 +12,7 @@
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Press+Start+2P&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -38,6 +38,27 @@
         </div>
       </div>
 
+      <!-- MODE SELECT (start menu) -->
+      <section class="modal mode-modal" id="m-mode" role="dialog" aria-labelledby="mode-h">
+        <div class="mode-wrap">
+          <div class="kicker">A TRIBUTE TO THE 1984 C64 CLASSIC</div>
+          <h1 id="mode-h" class="mode-logo">Raid Over Moscow <span>II</span></h1>
+          <p class="tag">Choose how you want to fly the raid.</p>
+          <div class="mode-grid">
+            <button id="btn-mode-remaster" class="mode-card" data-focus>
+              <img src="docs/screenshots/flight.png" alt="" />
+              <span class="mode-name">Remastered</span>
+              <span class="mode-desc">Rebuilt in 2.5D — isometric flight, free-roaming silo strikes, a 3D Red Square.</span>
+            </button>
+            <button id="btn-mode-classic" class="mode-card classic">
+              <img src="docs/screenshots/classic-flight.png" alt="" />
+              <span class="mode-name">Original · 1984 Mode</span>
+              <span class="mode-desc">The original levels and side-on play: hangar, flight, launch site, Kremlin and reactor — sharper graphics.</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- TITLE -->
       <section class="modal title-modal" id="m-title" role="dialog" aria-labelledby="logo">
         <div class="title-card">
@@ -48,6 +69,7 @@
             <button id="btn-start" class="btn primary" data-focus>Start Campaign</button>
             <button id="btn-select" class="btn">Stage Select</button>
             <button id="btn-help" class="btn">How to Play</button>
+            <button id="btn-to-mode" class="btn ghost">◂ Change Mode</button>
           </div>
           <div class="settings">
             <div class="seg" role="group" aria-label="Difficulty">
@@ -124,7 +146,7 @@
           <h2 id="pause-h">Paused</h2>
           <div class="menu">
             <button id="btn-resume" class="btn primary" data-focus>Resume</button>
-            <button id="btn-quit" class="btn">Quit to Title</button>
+            <button id="btn-quit" class="btn">Quit to Menu</button>
           </div>
         </div>
       </section>
@@ -174,6 +196,7 @@
   <script src="js/stages/silo.js"></script>
   <script src="js/stages/kremlin.js"></script>
   <script src="js/stages/reactor.js"></script>
+  <script src="js/classic.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>
