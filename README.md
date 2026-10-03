@@ -66,24 +66,34 @@ so move while throwing to **bank discs off the walls**. Destroy the robot, then 
 
 ## Original · 1984 Mode
 
-A recreation of the 1984 game's structure and feel: one-hit deaths, a launch countdown ticking while you
-fly, and the original sequence — **Strategic Command → Hangar → Flight → Launch Site** for each Soviet city,
-then **Moscow: Flight → Kremlin → Reactor Room**. It renders a 320×200 playfield inside a C64-style border,
-with the ships, soldiers and robot drawn at 3× resolution.
+A recreation of the original C64 game, rebuilt from the 1984 manual and the C64 screens: the same
+sequences, controls, colours and HUD read-outs, with sharper higher-resolution sprites.
 
-| Title | Strategic Command |
+| | |
 |---|---|
-| ![1984 title](docs/screenshots/classic-title.png) | ![1984 map](docs/screenshots/classic-map.png) |
-| **Hangar launch** — throttle up, lift off and time the bay door | **Flight** — side-on run with altitude and shadow; stay under the radar line |
-| ![1984 hangar](docs/screenshots/classic-hangar.png) | ![1984 flight](docs/screenshots/classic-flight.png) |
-| **Launch site** — looping passes; bomb the control vent when it opens, shoot rising ICBMs | **The Kremlin** — aim the bazooka crosshair at the defense-center doors |
-| ![1984 launch site](docs/screenshots/classic-silo.png) | ![1984 Kremlin](docs/screenshots/classic-kremlin.png) |
-| **Reactor room** — bank discs off the walls past the robot's shield | **Moscow in winter** |
-| ![1984 reactor](docs/screenshots/classic-reactor.png) | ![1984 winter flight](docs/screenshots/classic-flight-winter.png) |
+| **Title** — F1 Beginner · F3 Advanced · F5 Suicidal | **I · SAC Headquarters** — enemy launch detected, missiles arc toward a U.S. city |
+| ![1984 title](docs/screenshots/classic-title.png) | ![1984 SAC overview](docs/screenshots/classic-sac.png) |
+| **II · Hangar** — rotate, main engine, vertical thruster against gravity, no brakes; F7 opens the doors briefly | **III · Attack run** — fly low under the radar; heat seekers come from behind |
+| ![1984 hangar](docs/screenshots/classic-hangar.png) | ![1984 attack run](docs/screenshots/classic-run.png) |
+| **IV · Missile silos** — fire through a silo's window; your plane turns **blue** when lined up | **V · Defense Center** — mortar elevation from the trench; find the one door that turns white |
+| ![1984 silos](docs/screenshots/classic-silo.png) | ![1984 Defense Center](docs/screenshots/classic-center.png) |
+| **VI · Reactor room** — bounce discs off the back wall (laser dot) to hit robots from behind | **VII · The final chapter** — AP/UPI report |
+| ![1984 reactor](docs/screenshots/classic-reactor.png) | ![1984 ending](docs/screenshots/classic-end.png) |
 
-* If the countdown reaches zero before you destroy a launch site, an ICBM flies and a US city is lost.
-* Lose a bomber and the next one must launch from the hangar again.
-* Skill levels: Cadet / Pilot / Ace (left/right on the title screen). Esc returns to the start menu.
+**How it plays (as in the original):**
+
+* **SAC HQ:** a launch is detected from Leningrad, Minsk, Kiev or Saratov with a TIME TO IMPACT countdown.
+  Press fire to enter the space station.
+* **Hangar:** LEFT/RIGHT rotate, UP fires the main engine, FIRE the vertical thruster; land too hard and the
+  craft is lost. Press **F7** (or X) once airborne to open the doors — they close again quickly.
+* Back on the overview, steer the flashing aircraft to the launch site — or fly back to the station and press
+  fire to take more planes out (they wait outside and replace a lost plane at the start of the attack run).
+* **Attack run / silos:** forward = dive, back = climb (switch to Arcade controls with **C** on the title).
+  The four launch silos each award an extra plane; the centre control silo stops the attack.
+* If the countdown runs out, a U.S. city is hit and the site launches again. Three hits and the game is over.
+* **Moscow:** the Defense Center needs the right door found and all soldiers and tanks cleared; in the reactor,
+  robots (2/4/5 by level) need four hits each from behind. Catch returning discs; run out and you must fight
+  your way back in. The last robot leaves the reactor going critical — beat the ETCM timer to escape.
 
 ---
 
@@ -129,10 +139,10 @@ python -m http.server 8000
 
 * `node tools/simulate.js [difficulty 0-2] [god 0/1] [mission 0-4] [phase]` — plays the whole campaign
   headlessly on autopilot against a mock canvas to check stage flow and catch runtime errors.
-* `node tools/simulate.js classic [skill 0-2] [god 0/1]` — the same for the 1984 mode.
+* `node tools/simulate.js classic [level 0-2] [god 0/1] [start]` — the same for the 1984 mode.
 * `index.html?shot=<hangar|flight|silo|kremlin|reactor>&m=<0-4>&t=<seconds>` — jumps straight into a stage
   on autopilot (used to capture the screenshots above with headless Chrome).
-* `index.html?classic=<title|map|hangar|flight|silo|kremlin|reactor>&m=<0-4>&t=<seconds>` — same for the 1984 mode.
+* `index.html?classic=<title|sac|nav|hangar|run|silo|center|reactor|end>&m=<0-3>&t=<seconds>` — same for the 1984 mode.
 
 ## Project layout
 
@@ -145,7 +155,7 @@ js/models.js          low-poly models (bomber, MiG, helicopter, tank, ICBM, sold
 js/fx.js              explosions, smoke, debris, floating score text
 js/audio.js           procedural WebAudio sound effects and an original chiptune
 js/stages/*.js        hangar, flight, silo, kremlin, reactor
-js/classic.js         the 1984 mode: C64-style renderer, sprites and all five original levels
+js/classic.js         the 1984 mode: all seven original sequences, C64-style renderer and sprites
 js/game.js            start menu, campaign flow, HUD, modals, main loop
 tools/simulate.js     headless campaign simulator
 ```

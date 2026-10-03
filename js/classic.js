@@ -1,179 +1,186 @@
-/* Raid Over Moscow II — "1984 mode": a recreation of the original C64 levels.
-   Renders at 320x200 with a C64-style palette, pixel sprites and an 8x8 font,
-   then scales up inside a C64 border. Flow follows the original game:
-   command map + launch countdown -> hangar -> flight -> launch site, repeated
-   for each Soviet city, then Moscow: flight -> Kremlin -> reactor room. */
+/* Raid Over Moscow II — "1984 mode": a recreation of the original C64 game,
+   built from the original manual and the C64 screens.
+   Sequences: I SAC HQ (orbital overview) · II Hangar (thrusters, F7 doors) ·
+   III Attack run · IV Missile silos · V Defense Center · VI Reactor · VII Ending.
+   Logical screen 320x200 (playfield 0-159, five text rows below) rendered at
+   3x for crisp, higher-resolution sprites inside the C64 brown border. */
 'use strict';
 (function () {
   const ROM = window.ROM;
   const A = ROM.Audio;
-  const W = 320, H = 200, PH = 184;
+  const W = 320, H = 200, PF = 160, BS = 3;
   const FONT = '8px "Press Start 2P", monospace';
 
-  /* C64-inspired 16 colour palette (blues pushed away from violet) */
-  const PAL = {
-    k: '#000000', w: '#ffffff', r: '#a0443a', c: '#70c8cc', g: '#4fa84f', b: '#2b3fb0', y: '#d8dc7a', o: '#b06a30',
-    n: '#6d5412', R: '#e07b70', d: '#555555', m: '#888888', G: '#9ae29b', B: '#6c8cff', l: '#bbbbbb',
+  /* colours sampled from the C64 version */
+  const P = {
+    k: '#000000', w: '#ffffff', N: '#7f5307', n: '#5e3d05', d: '#575753', D: '#626262', l: '#a3a7a7',
+    b: '#4f44d8', B: '#4f44ff', y: '#fbfb8b', Y: '#e8d870', m: '#8a283e', r: '#b8342c', R: '#e07b70',
+    o: '#d89c5b', O: '#d9a43c', G: '#b3ffbf', c: '#b6fbfc', C: '#94effe', g: '#6af06f', h: '#3f9a45',
+    L: '#a799ff',
   };
-  const col = (k) => PAL[k] || k;
+  const col = (k) => P[k] || k;
+  let c = null;
 
-  let c = null; // active 2D context (320x200 buffer)
-  const rect = (x, y, w, h, k) => { c.fillStyle = col(k); c.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); };
-  const text = (s, x, y, k, align) => {
-    c.font = FONT; c.textAlign = align || 'left'; c.textBaseline = 'top';
-    c.fillStyle = col(k); c.fillText(s, Math.round(x), Math.round(y));
-  };
-  const circle = (x, y, r, k) => {
-    for (let dy = -r; dy <= r; dy++) { const w = Math.round(Math.sqrt(Math.max(0, r * r - dy * dy))); rect(x - w, y + dy, w * 2 + 1, 1, k); }
-  };
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const rnd = (a, b) => a + Math.random() * (b - a);
   const blink = (t, hz) => Math.floor(t * (hz || 2)) % 2 === 0;
+  const rect = (x, y, w, h, k) => { c.fillStyle = col(k); c.fillRect(x, y, w, h); };
+  const ell = (x, y, rx, ry, k) => { c.beginPath(); c.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, Math.PI * 2); c.fillStyle = col(k); c.fill(); };
+  const poly = (pts, k) => { c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); c.closePath(); c.fillStyle = col(k); c.fill(); };
+  const line = (x1, y1, x2, y2, k, w) => { c.strokeStyle = col(k); c.lineWidth = w || 1; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); };
+  const text = (s, x, y, k, align) => {
+    c.font = FONT; c.textAlign = align || 'left'; c.textBaseline = 'top';
+    c.fillStyle = col(k); c.fillText(s, x, y);
+  };
+  const row = (i) => PF + i * 8;
+  const pad = (n, w) => String(Math.max(0, Math.floor(n))).padStart(w, '0');
+  const sgn = (v, w) => (v < 0 ? '-' : ' ') + pad(Math.abs(Math.round(v)), w);
+  const clock = (t, tenths) => {
+    t = Math.max(0, t);
+    const m = Math.floor(t / 60), s = t - m * 60;
+    return pad(m, 2) + ':' + (tenths ? s.toFixed(1).padStart(4, '0') : pad(s, 2));
+  };
 
-  /* ---------- hi-res vector sprites (drawn at BS x the logical resolution) ---------- */
-  const BS = 3;
-  const sprCache = new Map();
-  function vsprite(key, w, h, fn) {
-    let s = sprCache.get(key);
+  /* ---------- hi-res vector sprites ---------- */
+  const cache = new Map();
+  function spr(key, w, h, fn) {
+    let s = cache.get(key);
     if (s) return s;
     s = document.createElement('canvas');
     s.width = w * BS; s.height = h * BS;
     const g = s.getContext('2d');
-    g.scale(BS, BS);
-    g.lineJoin = 'round';
+    g.scale(BS, BS); g.lineJoin = 'round'; g.lineCap = 'round';
     fn(g);
-    sprCache.set(key, s);
+    cache.set(key, s);
     return s;
   }
-  function blit(s, x, y, flip, sc) {
-    sc = sc || 1;
-    const w = s.width / BS * sc, h = s.height / BS * sc;
-    // scaled sprites stay centred on their logical (unscaled) box
-    x -= (w - s.width / BS) / 2; y -= (h - s.height / BS) / 2;
-    if (flip) { c.save(); c.translate(x + w, y); c.scale(-1, 1); c.drawImage(s, 0, 0, w, h); c.restore(); }
-    else c.drawImage(s, x, y, w, h);
+  function blit(s, x, y, o) {
+    o = o || {};
+    const sc = o.sc || 1;
+    const w = (s.width / BS) * sc, h = (s.height / BS) * sc;
+    c.save();
+    c.translate(x, y);
+    if (o.rot) c.rotate(o.rot);
+    if (o.flip) c.scale(-1, 1);
+    c.drawImage(s, -w / 2, -h / 2, w, h);
+    c.restore();
   }
-  const poly = (g, pts, fill, stroke, lw) => {
+  const gp = (g, pts, fill, stroke, lw) => {
     g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
     if (fill) { g.fillStyle = col(fill); g.fill(); }
-    if (stroke) { g.strokeStyle = col(stroke); g.lineWidth = lw || 0.35; g.stroke(); }
+    if (stroke) { g.strokeStyle = col(stroke); g.lineWidth = lw || 0.4; g.stroke(); }
   };
-  const ell = (g, x, y, rx, ry, fill) => { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.fillStyle = col(fill); g.fill(); };
+  const ge = (g, x, y, rx, ry, fill) => { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.fillStyle = col(fill); g.fill(); };
 
-  /* player strike bomber, facing right (16x7) */
-  function planeSpr(hull, wing, glass) {
-    return vsprite('plane' + hull + wing + glass, 16, 7, (g) => {
-      poly(g, [[6, 2.6], [9.2, 2.6], [7.4, 0.4], [6.2, 0.4]], wing, 'k');
-      poly(g, [[0.2, 2.9], [2.6, 2.9], [1.4, 0.2], [0.2, 0.2]], wing, 'k');
-      poly(g, [[0, 3.2], [3, 2.5], [12, 2.3], [15.8, 3.5], [12, 4.6], [2, 4.7], [0, 4.2]], hull, 'k');
-      poly(g, [[0.4, 3.9], [15, 3.7], [12, 4.5], [2, 4.6]], 'd');
-      poly(g, [[4.6, 3.8], [9.6, 3.8], [6.8, 6.8], [4.4, 6.8]], wing, 'k');
-      ell(g, 11, 2.75, 2.1, 0.85, glass);
-      ell(g, 11.5, 2.5, 0.9, 0.3, 'w');
-      g.fillStyle = col('R'); g.fillRect(3.2, 3.15, 6, 0.45);
-    });
-  }
-  /* MiG interceptor, facing right (16x6) */
-  const migSpr = () => vsprite('mig', 16, 6, (g) => {
-    poly(g, [[0.4, 2.8], [3, 2.8], [1.8, 0], [0.6, 0]], 'r', 'k');
-    poly(g, [[0, 3], [3, 2.4], [11, 2.3], [15.8, 3.3], [11, 4.4], [1.5, 4.5]], 'm', 'k');
-    poly(g, [[5, 3.6], [9.5, 3.6], [6, 5.9], [4.2, 5.9]], 'd', 'k');
-    ell(g, 10.2, 2.6, 1.8, 0.75, 'c');
-    ell(g, 0.4, 3.6, 0.6, 0.7, 'o');
-    g.fillStyle = col('r'); g.beginPath(); g.arc(6, 3.4, 0.6, 0, Math.PI * 2); g.fill();
-  });
-  /* attack helicopter, facing right (16x8), two rotor frames */
-  const heliSpr = (f) => vsprite('heli' + f, 16, 8, (g) => {
-    g.fillStyle = col('k');
-    if (f) g.fillRect(0.5, 0.4, 14, 0.6); else g.fillRect(4, 0.4, 7, 0.6);
-    g.fillRect(7.2, 0.8, 0.8, 1.6);
-    poly(g, [[0, 3.6], [6, 3.4], [6, 4.4], [0.6, 4.4]], 'g', 'k');
-    poly(g, [[0, 2], [1.2, 2], [1.2, 4], [0, 4]], 'G');
-    ell(g, 10, 4.2, 5, 2.2, 'g');
-    poly(g, [[11, 2.4], [14.4, 3.4], [15.2, 4.6], [12, 4.6]], 'c', 'k');
-    g.strokeStyle = col('k'); g.lineWidth = 0.5;
-    g.beginPath(); g.moveTo(7, 6.3); g.lineTo(8, 7.4); g.moveTo(12, 6.3); g.lineTo(11.5, 7.4); g.moveTo(6.5, 7.5); g.lineTo(14.5, 7.5); g.stroke();
-    g.fillStyle = col('d'); g.fillRect(8, 5.4, 4, 1);
-  });
-  /* tank, facing right (16x8) */
-  const tankSpr = (dead) => vsprite('tank' + dead, 16, 8, (g) => {
-    const body = dead ? 'd' : 'g', dark = dead ? 'k' : 'n';
-    poly(g, [[0.5, 4.6], [15.5, 4.6], [14.5, 7.6], [1.5, 7.6]], 'd', 'k');
-    for (let i = 0; i < 6; i++) ell(g, 2.4 + i * 2.25, 6.2, 0.9, 0.9, 'k');
-    poly(g, [[1, 3], [15, 3], [15.6, 4.8], [0.4, 4.8]], body, 'k');
-    poly(g, [[4.5, 1], [9.5, 1], [10.5, 3], [4, 3]], body, 'k');
-    poly(g, [[10, 1.7], [16, 1.7], [16, 2.3], [10, 2.3]], dark);
-    if (!dead) { g.fillStyle = col('G'); g.globalAlpha = 0.5; g.fillRect(5, 1.3, 3, 0.4); g.globalAlpha = 1; }
-  });
-  /* infantry (8x12), two walk frames */
-  const soldierSpr = (f, body, helmet) => vsprite('sold' + f + body + helmet, 8, 12, (g) => {
-    g.lineCap = 'round';
-    g.strokeStyle = col(body); g.lineWidth = 1.5;
-    g.beginPath();
-    if (f) { g.moveTo(3.4, 7.5); g.lineTo(2.6, 11); g.moveTo(4.4, 7.5); g.lineTo(5.6, 11); }
-    else { g.moveTo(3.6, 7.5); g.lineTo(3.2, 11); g.moveTo(4.2, 7.5); g.lineTo(4.6, 11); }
-    g.stroke();
-    g.fillStyle = col('k'); g.fillRect(f ? 1.8 : 2.4, 11, 1.8, 1); g.fillRect(f ? 4.8 : 4, 11, 1.8, 1);
-    poly(g, [[2.2, 3.6], [5.8, 3.6], [5.6, 8], [2.4, 8]], body, 'k');
-    g.fillStyle = col('k'); g.fillRect(2.3, 6.6, 3.4, 0.6);
-    ell(g, 4, 2.3, 1.3, 1.3, 'R');
-    poly(g, [[2.4, 2.1], [2.8, 0.6], [5.2, 0.6], [5.7, 2.1]], helmet, 'k');
-    g.strokeStyle = col(body); g.lineWidth = 1; g.beginPath(); g.moveTo(5.4, 4.4); g.lineTo(6.6, 6.4); g.stroke();
-  });
-  /* reactor defence robot (16x16) */
-  const robotSpr = (hit) => vsprite('robot' + hit, 16, 16, (g) => {
-    const m = hit ? 'w' : 'm', l = hit ? 'w' : 'l';
-    poly(g, [[2, 12.5], [7, 12.5], [7, 15.5], [2, 15.5]], 'd', 'k');
-    poly(g, [[9, 12.5], [14, 12.5], [14, 15.5], [9, 15.5]], 'd', 'k');
-    poly(g, [[3, 5], [13, 5], [12.4, 12.6], [3.6, 12.6]], l, 'k');
-    poly(g, [[0.6, 5.4], [3, 5.4], [3, 10.6], [0.6, 10.6]], m, 'k');
-    poly(g, [[13, 5.4], [15.4, 5.4], [15.4, 10.6], [13, 10.6]], m, 'k');
-    poly(g, [[5, 0.4], [11, 0.4], [11, 4.2], [5, 4.2]], m, 'k');
-    g.fillStyle = col('R'); g.fillRect(5.8, 1.6, 4.4, 1.2);
-    g.fillStyle = col('y'); g.fillRect(4.5, 7, 7, 1); g.fillRect(4.5, 9, 7, 1);
-    ell(g, 8, 11, 1.2, 0.8, 'c');
-  });
-  const drawSoldier = (x, y, f, body, helmet) => blit(soldierSpr(f, body, helmet), x, y);
-
-  /* ---------- explosions ---------- */
-  function Booms() { this.l = []; }
-  Booms.prototype.add = function (x, y, s) {
-    s = s || 1;
-    const d = [];
-    for (let i = 0; i < 6 * s; i++) d.push({ x: 0, y: 0, vx: rnd(-50, 50) * s, vy: rnd(-70, -10) * s });
-    this.l.push({ x, y, s, t: 0, d });
-  };
-  Booms.prototype.update = function (dt, scroll) {
-    for (const b of this.l) {
-      b.t += dt; b.x -= (scroll || 0) * dt;
-      for (const p of b.d) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 160 * dt; }
+  /* stealth fighter seen from above, nose up (hangar) */
+  const topPlane = (k) => spr('top' + k, 16, 16, (g) => {
+    gp(g, [[8, 0.4], [9.6, 5], [15.6, 11.5], [15.6, 13.4], [10, 11.6], [9.6, 15.4], [6.4, 15.4], [6, 11.6], [0.4, 13.4], [0.4, 11.5], [6.4, 5]], k, k === 'k' ? null : 'k', 0.5);
+    if (k !== 'k') {
+      gp(g, [[8, 2], [8.9, 6], [8, 9], [7.1, 6]], 'k');
+      gp(g, [[3, 12], [6, 10.6], [6, 11.6]], 'k'); gp(g, [[13, 12], [10, 10.6], [10, 11.6]], 'k');
     }
-    this.l = this.l.filter((b) => b.t < 0.9);
+  });
+  /* side view facing right (attack run) */
+  const sidePlane = (k) => spr('side' + k, 22, 9, (g) => {
+    gp(g, [[0.4, 3.6], [3, 3.6], [1.6, 0.4], [0.4, 0.4]], k, 'k');
+    gp(g, [[0, 4], [4, 3.2], [15, 3], [21.6, 4.6], [15, 6], [3, 6.2], [0, 5.6]], k, 'k', 0.5);
+    gp(g, [[6.5, 5], [12, 5], [8.6, 8.6], [5.6, 8.6]], 'k');
+    ge(g, 14.6, 3.6, 2.2, 0.8, 'k');
+  });
+  /* rear view (silo attack) */
+  const rearPlane = (k) => spr('rear' + k, 18, 9, (g) => {
+    gp(g, [[0.3, 6.4], [9, 2.6], [17.7, 6.4], [17.7, 7.6], [9, 5.6], [0.3, 7.6]], k, 'k', 0.45);
+    gp(g, [[8.3, 0.3], [9.7, 0.3], [9.8, 5.4], [8.2, 5.4]], k, 'k', 0.4);
+    ge(g, 9, 5.2, 1.4, 1.1, k); ge(g, 9, 5.4, 0.7, 0.55, 'o');
+  });
+  const enemyRear = () => spr('erear', 14, 7, (g) => {
+    gp(g, [[0.3, 4.6], [7, 1.6], [13.7, 4.6], [13.7, 5.6], [7, 4.4], [0.3, 5.6]], 'w', 'k', 0.4);
+    gp(g, [[6.3, 0.3], [7.7, 0.3], [7.6, 4.4], [6.4, 4.4]], 'm');
+    ge(g, 7, 4.2, 1, 0.9, 'm');
+  });
+  const enemySide = () => spr('eside', 18, 7, (g) => {
+    gp(g, [[0.4, 3], [2.6, 3], [1.4, 0.2], [0.4, 0.2]], 'm', 'k');
+    gp(g, [[0, 3.2], [3, 2.6], [12, 2.4], [17.6, 3.6], [12, 4.8], [2, 5], [0, 4.4]], 'w', 'k', 0.45);
+    gp(g, [[5, 4], [9.5, 4], [6.6, 6.8], [4.4, 6.8]], 'l', 'k', 0.3);
+  });
+  const seeker = () => spr('seek', 16, 4, (g) => {
+    gp(g, [[0, 1.2], [3, 1.2], [3, 2.8], [0, 2.8]], 'o');
+    gp(g, [[3, 1.1], [13, 1.1], [15.8, 2], [13, 2.9], [3, 2.9]], 'w', 'k', 0.3);
+    gp(g, [[3, 1.1], [5, 0], [6, 1.1]], 'w'); gp(g, [[3, 2.9], [5, 4], [6, 2.9]], 'w');
+  });
+  /* tank facing left */
+  const tankSpr = () => spr('tank', 16, 10, (g) => {
+    gp(g, [[1, 6], [15, 6], [14, 9.6], [2, 9.6]], 'k');
+    gp(g, [[0.6, 3.6], [15.4, 3.6], [15.4, 6.6], [0.6, 6.6]], 'y', 'k', 0.4);
+    gp(g, [[5, 1], [11, 1], [12, 3.8], [4.6, 3.8]], 'O', 'k', 0.4);
+    gp(g, [[0, 1.8], [5.5, 1.8], [5.5, 2.6], [0, 2.6]], 'k');
+    for (let i = 0; i < 5; i++) ge(g, 3 + i * 2.5, 8, 0.8, 0.8, 'd');
+  });
+  const robotSpr = (hit) => spr('robot' + hit, 18, 18, (g) => {
+    const b = hit ? 'w' : 'o';
+    gp(g, [[2, 14], [16, 14], [16, 17.6], [2, 17.6]], 'k');
+    gp(g, [[1, 4], [17, 4], [16, 14.4], [2, 14.4]], b, 'k', 0.5);
+    gp(g, [[4, 0.6], [14, 0.6], [14, 4.4], [4, 4.4]], b, 'k', 0.5);
+    gp(g, [[5, 1.8], [13, 1.8], [13, 3.2], [5, 3.2]], 'k');
+    gp(g, [[4, 7], [14, 7], [14, 11], [4, 11]], 'k');
+    gp(g, [[6, 8], [12, 8], [12, 10], [6, 10]], hit ? 'w' : 'O');
+    ge(g, 0.8, 9, 1.2, 2.4, 'k'); ge(g, 17.2, 9, 1.2, 2.4, 'k');
+  });
+  const figure = (k) => spr('fig' + k, 6, 10, (g) => {
+    g.strokeStyle = col(k); g.lineWidth = 1.1;
+    g.beginPath(); g.moveTo(3, 3); g.lineTo(3, 6.5); g.lineTo(1.4, 9.6); g.moveTo(3, 6.5); g.lineTo(4.6, 9.6);
+    g.moveTo(0.6, 4); g.lineTo(5.4, 4); g.stroke();
+    ge(g, 3, 1.5, 1.3, 1.3, k);
+  });
+  const station = () => spr('station', 14, 7, (g) => {
+    gp(g, [[0, 1], [3, 1], [3, 6], [0, 6]], 'w'); gp(g, [[11, 1], [14, 1], [14, 6], [11, 6]], 'w');
+    gp(g, [[3, 3], [11, 3], [11, 4], [3, 4]], 'w'); ge(g, 7, 3.5, 1.8, 1.8, 'w');
+  });
+
+  function planeIcon(x, y, k) {
+    poly([[x + 3, y], [x + 4, y + 3], [x + 7, y + 6], [x + 4, y + 5.4], [x + 3, y + 7], [x + 2, y + 5.4], [x - 1, y + 6], [x + 2, y + 3]], k);
+  }
+
+  /* explosions */
+  function Booms() { this.l = []; }
+  Booms.prototype.add = function (x, y, s, sc) {
+    const d = [];
+    for (let i = 0; i < 8 * (s || 1); i++) d.push({ x: 0, y: 0, vx: rnd(-40, 40) * (s || 1), vy: rnd(-55, -5) * (s || 1) });
+    this.l.push({ x, y, s: s || 1, t: 0, d, sc: sc || 0 });
+  };
+  Booms.prototype.update = function (dt) {
+    for (const b of this.l) { b.t += dt; b.x -= b.sc * dt; for (const p of b.d) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 120 * dt; } }
+    this.l = this.l.filter((b) => b.t < 1);
   };
   Booms.prototype.draw = function () {
     for (const b of this.l) {
-      if (b.t < 0.55) {
-        const r = Math.round(Math.min(1, b.t / 0.2) * 6 * b.s * (b.t > 0.4 ? 0.6 : 1));
-        circle(b.x, b.y, r, b.t < 0.12 ? 'w' : b.t < 0.28 ? 'y' : b.t < 0.42 ? 'o' : 'r');
+      if (b.t < 0.6) {
+        const r = Math.min(1, b.t / 0.18) * 6 * b.s * (b.t > 0.4 ? 0.6 : 1);
+        ell(b.x, b.y, r * 1.2, r, b.t < 0.12 ? 'w' : b.t < 0.3 ? 'y' : b.t < 0.45 ? 'o' : 'r');
       }
-      for (const p of b.d) rect(b.x + p.x, b.y + p.y, 1, 1, b.t < 0.4 ? 'y' : 'd');
+      for (const p of b.d) rect(b.x + p.x, b.y + p.y, 1, 1, b.t < 0.5 ? 'y' : 'k');
     }
   };
 
-  const TARGETS = [
-    { name: 'LENINGRAD', x: 96, y: 50, biome: 'coast' },
-    { name: 'MINSK', x: 70, y: 90, biome: 'forest' },
-    { name: 'KIEV', x: 92, y: 122, biome: 'farm' },
-    { name: 'SARATOV', x: 214, y: 110, biome: 'steppe' },
-    { name: 'MOSCOW', x: 138, y: 80, biome: 'winter', final: true },
+  /* geography for the SAC overview (playfield coordinates) */
+  const LAND = [
+    ['l', [[0, 80], [30, 77], [60, 75], [86, 74], [100, 77], [94, 83], [80, 87], [60, 89], [40, 87], [20, 89], [0, 91]]],
+    ['l', [[102, 73], [126, 72], [129, 77], [116, 82], [105, 80]]],
+    ['y', [[0, 91], [20, 89], [40, 87], [60, 89], [80, 87], [84, 92], [77, 98], [71, 103], [67, 109], [63, 114], [59, 121], [52, 118], [44, 119], [36, 125], [28, 121], [18, 115], [8, 113], [0, 111]]],
+    ['y', [[56, 118], [63, 114], [65, 124], [61, 129]]],
+    ['l', [[0, 111], [8, 113], [18, 115], [28, 121], [36, 125], [40, 133], [48, 139], [44, 143], [34, 137], [22, 129], [10, 123], [0, 119]]],
+    ['l', [[46, 149], [60, 145], [80, 147], [97, 153], [101, 160], [50, 160], [44, 155]]],
+    ['l', [[150, 81], [156, 79], [158, 87], [152, 89]]],
+    ['l', [[178, 72], [196, 70], [199, 76], [189, 81], [181, 79]]],
+    ['l', [[160, 82], [168, 76], [186, 74], [206, 75], [208, 83], [201, 89], [197, 98], [191, 104], [183, 100], [177, 107], [169, 104], [161, 98], [154, 96], [150, 90]]],
+    ['l', [[138, 113], [160, 109], [180, 111], [200, 107], [220, 111], [240, 113], [262, 121], [276, 131], [286, 146], [291, 160], [150, 160], [140, 149], [134, 131]]],
+    ['l', [[220, 111], [240, 105], [260, 101], [290, 99], [320, 97], [320, 160], [300, 160], [291, 141], [276, 125], [256, 115]]],
+    ['m', [[206, 75], [230, 73], [260, 74], [290, 73], [320, 75], [320, 101], [300, 99], [290, 105], [270, 103], [256, 109], [243, 113], [231, 105], [219, 99], [206, 97], [201, 89], [208, 83]]],
   ];
-  const US = ['SEATTLE', 'HOUSTON', 'LOS ANGELES', 'CHICAGO', 'WASHINGTON', 'NEW YORK'];
-  const BIOME = {
-    coast: { ground: 'g', stripe: 'G', far: 'm', tree: 'g', water: true },
-    forest: { ground: 'g', stripe: 'n', far: 'd', tree: 'g' },
-    farm: { ground: 'G', stripe: 'y', far: 'm', tree: 'g' },
-    steppe: { ground: 'y', stripe: 'o', far: 'o', tree: 'n' },
-    winter: { ground: 'w', stripe: 'l', far: 'l', tree: 'g', snow: true },
-  };
+  const horizon = (x) => 70 + 10 * Math.pow((x - 175) / 175, 2);
+  const US = { SEATTLE: [7, 94], 'LOS ANGELES': [9, 107], DENVER: [25, 99], DALLAS: [35, 113], CHICAGO: [50, 94], ATLANTA: [53, 107], 'NEW YORK': [71, 94], WASHINGTON: [67, 100], MIAMI: [60, 123] };
+  const SITES = { LENINGRAD: [229, 79], MINSK: [219, 90], KIEV: [229, 101], SARATOV: [263, 96], MOSCOW: [241, 86] };
+  const STATION = [175, 16];
 
   /* =====================================================================
      Controller
@@ -185,20 +192,20 @@
     this.cv.width = W * BS; this.cv.height = H * BS;
     this.cx = this.cv.getContext('2d');
     this.t = 0;
-    this.skill = ROM.store.get('classicSkill', 1);
-    this.hi = ROM.store.get('hiClassic', 10000);
-    this.scr = 'title';
-    this.alert = null;
+    this.lvl = ROM.store.get('classicLevel', 0);
+    this.hi = ROM.store.get('hiClassic', 0);
+    this.score = 0;
+    this.invert = ROM.store.get('classicArcade', false);
     this.stars = [];
-    for (let i = 0; i < 60; i++) this.stars.push([Math.random() * W, Math.random() * PH, Math.random() < 0.3 ? 'w' : 'l']);
+    for (let i = 0; i < 70; i++) this.stars.push([Math.random() * W, Math.random() * 70, Math.random() < 0.3]);
+    this.fkeys = {};
+    this.scr = 'title';
+    this.seq = null;
+    this.maxImpacts = 3;
     try { if (document.fonts) document.fonts.load(FONT); } catch (e) { /* ignore */ }
-    if (opts.level === 'map') { this.newGame(); this.target = opts.mission || 0; this.scr = 'map'; this.mapT = 1; }
-    else if (opts.level && opts.level !== 'title') {
-      this.newGame();
-      this.target = opts.mission || 0;
-      this.after = opts.level === 'hangar' ? 'flight' : null;
-      this.startLevel(opts.level);
-    } else A.music('title');
+    this.hold = opts.level === 'title' || opts.level === 'sac';
+    if (opts.level && opts.level !== 'title') this.jump(opts.level, opts.mission || 0);
+    else A.music('title');
   }
   ROM.Classic = Classic;
   const K = Classic.prototype;
@@ -206,1228 +213,1243 @@
   K.name = 'RAID OVER MOSCOW — 1984';
   K.hint = '';
 
+  /* F-keys: F1/F3/F5 select the level, F7 opens the hangar doors */
+  window.addEventListener('keydown', (e) => {
+    const st = ROM.Game && ROM.Game.stage;
+    if (!st || !st.classic) return;
+    if (['F1', 'F3', 'F5', 'F7'].includes(e.code)) { e.preventDefault(); st.fkeys[e.code] = true; }
+    if (e.code === 'KeyC' && st.scr === 'title') st.fkeys.C = true;
+  });
+  K.fkey = function (k) { const v = this.fkeys[k]; this.fkeys[k] = false; return !!v; };
+
   K.newGame = function () {
     this.score = 0;
-    this.planes = [6, 5, 4][this.skill];
-    this.cities = US.slice();
-    this.target = 0;
-    this.resumeX = 0;
-    this.silo = null;
-    this.launchT = this.launchTime();
+    this.station = [8, 7, 6][this.lvl];
+    this.out = 0;
+    this.impacts = 0;
+    this.hits = [];
+    this.alive = { LENINGRAD: 1, MINSK: 1, KIEV: 1, SARATOV: 1 };
+    this.final = false;
+    this.launch = null;
+    this.men = 0;
+    this.discs = 0;
+    this.robotsLeft = undefined; this.robotHits = 0;
+    this.newLaunch();
+    this.go(new Sac(this, 'alert'));
+    this.scr = 'play';
+    A.stopMusic();
   };
-  K.launchTime = function () { return 170 - this.skill * 25 - this.target * 8; };
-  K.tgt = function () { return TARGETS[this.target]; };
+  K.jump = function (lv, m) { // demo / screenshot entry points
+    this.newGame();
+    const names = Object.keys(this.alive);
+    this.launch.site = names[m % 4] || 'SARATOV';
+    if (lv === 'sac') return;
+    if (lv === 'nav') { this.station--; this.out = 1; this.go(new Sac(this, 'nav')); return; }
+    if (lv === 'hangar') { this.go(new Hangar(this)); return; }
+    if (lv === 'run') { this.station--; this.go(new Run(this)); return; }
+    if (lv === 'silo') { this.station--; this.go(new Silo(this)); return; }
+    this.final = true; this.launch = null;
+    for (const s of names) this.alive[s] = 0;
+    this.men = 6;
+    if (lv === 'mrun') this.go(new Run(this));
+    else if (lv === 'center') this.go(new Center(this));
+    else if (lv === 'reactor') { this.discs = 7; this.go(new Reactor(this)); }
+    else if (lv === 'end') this.go(new Ending(this, true, 5));
+  };
+  K.go = function (s) { this.seq = s; A.engine(false); };
   K.addScore = function (n) {
     this.score += n;
     if (this.score > this.hi) { this.hi = this.score; ROM.store.set('hiClassic', this.hi); }
   };
-
-  K.startLevel = function (name) {
-    this.levelName = name;
-    this.lv = new LEVELS[name](this);
-    this.scr = 'level';
-    A.stopMusic();
+  K.siteName = function () { return this.final ? 'MOSCOW' : this.launch ? this.launch.site : ''; };
+  K.newLaunch = function () {
+    const sites = Object.keys(this.alive).filter((s) => this.alive[s]);
+    const targets = Object.keys(US).filter((t) => !this.hits.includes(t));
+    const t0 = [420, 330, 270][this.lvl] - (4 - sites.length) * 20;
+    this.launch = { site: sites[(Math.random() * sites.length) | 0], target: targets[(Math.random() * targets.length) | 0], t: t0, t0 };
   };
-  K.show = function (lines, dur, then, colr) {
-    this.scr = 'msg';
-    this.msg = { lines, t: dur, then, col: colr || 'w' };
-    A.engine(false);
+  K.tickLaunch = function (dt) {
+    if (!this.launch || this.final || this.game.state === 'shot') return;
+    this.launch.t -= dt;
+    if (this.launch.t <= 0) this.impact();
   };
-  K.levelDone = function (bonus) {
-    if (bonus) this.addScore(bonus);
+  K.impact = function () {
+    const L = this.launch;
+    this.hits.push(L.target);
+    this.impacts++;
+    A.sfx('bigboom');
+    if (this.seq && this.seq.flying) this.out++; // the aircraft waits outside for the next attack
+    if (this.impacts >= this.maxImpacts) { this.gameOver('THE U.S. HAS SUFFERED ' + this.impacts + ' NUCLEAR HITS'); return; }
+    const site = L.site;
+    this.newLaunch();
+    this.launch.site = site; // the site is still operational and launches again
+    this.go(new Sac(this, 'impact', L));
+  };
+  K.enterStation = function () {
+    if (this.station > 0) { this.go(new Hangar(this)); return; }
+    if (this.out > 0) { this.go(new Sac(this, 'nav')); return; }
+    this.gameOver('YOUR SQUADRON HAS BEEN LOST');
+  };
+  K.hangarDone = function () { this.station--; this.out++; A.sfx('clear'); this.go(new Sac(this, 'nav')); };
+  K.hangarCrash = function () {
+    this.station--;
+    if (this.station > 0) this.go(new Hangar(this));
+    else if (this.out > 0) this.go(new Sac(this, 'nav'));
+    else this.gameOver('YOUR SQUADRON HAS BEEN LOST');
+  };
+  K.navArrive = function () { this.out--; this.go(new Run(this)); };
+  K.planeLost = function () {
     A.engine(false);
-    A.sfx('clear');
-    const n = this.levelName, T = this.tgt();
-    if (n === 'hangar') {
-      const next = this.after || 'flight';
-      this.after = null;
-      this.show(['LAUNCH SUCCESSFUL', '', 'PROCEED TO ' + T.name], 2, () => this.startLevel(next), 'G');
-    } else if (n === 'flight') {
-      this.resumeX = 0;
-      this.show([T.name + ' IN SIGHT', '', T.final ? 'ATTACK THE KREMLIN' : 'DESTROY THE LAUNCH SITE'], 2.2, () => this.startLevel(T.final ? 'kremlin' : 'silo'), 'y');
-    } else if (n === 'silo') {
-      this.silo = null;
-      this.target++;
-      this.launchT = this.launchTime();
-      this.show([T.name + ' LAUNCH SITE', 'DESTROYED', '', 'BONUS ' + (bonus || 0)], 2.8, () => { this.scr = 'map'; this.mapT = 0; }, 'G');
-    } else if (n === 'kremlin') {
-      this.show(['DEFENSE CENTER BREACHED', '', 'ENTER THE REACTOR ROOM'], 2.5, () => this.startLevel('reactor'), 'G');
-    } else if (n === 'reactor') {
-      const b = this.cities.length * 5000 + this.planes * 2000;
-      this.addScore(b);
-      this.winBonus = b;
-      this.scr = 'win'; this.endT = 0;
-      A.music('victory');
+    if (this.out > 0) { this.out--; this.go(new Run(this, true)); return; } // a waiting aircraft takes over
+    if (this.station > 0) { this.go(new Sac(this, this.final ? 'final' : 'alert')); return; }
+    this.gameOver('YOUR SQUADRON HAS BEEN LOST');
+  };
+  K.extraPlane = function () { if (this.station + this.out < 8) this.station++; };
+  K.siteDestroyed = function () {
+    this.alive[this.launch.site] = 0;
+    this.station = Math.min(9, this.station + this.out + 1); // every aircraft returns to the station
+    this.out = 0;
+    if (!Object.values(this.alive).some(Boolean)) {
+      this.final = true;
+      this.launch = null;
+      this.go(new Sac(this, 'final'));
+    } else {
+      this.newLaunch();
+      this.go(new Sac(this, 'alert'));
     }
   };
-  K.die = function (ground) {
-    this.planes--;
-    A.engine(false);
-    A.sfx('die');
-    if (this.planes <= 0) { this.gameOver(); return; }
-    if (ground) {
-      this.show(['SOLDIER DOWN', '', this.planes + ' LEFT'], 2, () => { this.scr = 'level'; this.lv.respawn(); }, 'R');
-      return;
-    }
-    if (this.levelName !== 'hangar') this.after = this.levelName;
-    if (this.levelName === 'silo') this.silo = this.lv.persist();
-    this.show(['PLANE LOST', '', this.planes + ' PLANES REMAINING'], 2.2, () => this.startLevel('hangar'), 'R');
+  K.runDone = function () {
+    if (this.final) { this.men = Math.min(9, this.station + this.out + 1); this.go(new Center(this)); }
+    else this.go(new Silo(this));
   };
-  K.cityLost = function (from) {
-    const city = this.cities.pop();
-    A.sfx('alarm');
-    this.alert = { text: 'ICBM FROM ' + (from || this.tgt().name), text2: (city || 'A U.S. CITY') + ' DESTROYED', t: 3.5 };
-    if (!this.cities.length) setTimeout(() => this.gameOver('ALL U.S. CITIES DESTROYED'), 1200);
-  };
+  K.centerDone = function () { if (this.discs <= 0) this.discs = 7; this.go(new Reactor(this)); };
   K.gameOver = function (why) {
     if (this.scr === 'over') return;
-    this.scr = 'over'; this.endT = 0; this.overWhy = why || 'YOUR SQUADRON IS LOST';
-    A.engine(false);
+    this.scr = 'over'; this.overWhy = why; this.overT = 0;
+    A.engine(false); A.sfx('die');
   };
 
   K.onPause = function () {
-    if (this.scr === 'title' || this.scr === 'over' || this.scr === 'win') { this.game.toModeSelect(); return true; }
+    if (this.scr === 'title' || this.scr === 'over' || (this.seq && this.seq.isEnding)) { this.game.toModeSelect(); return true; }
     return false;
   };
-
-  K.auto = function () { return this.lv && this.lv.auto ? this.lv.auto() : {}; };
+  K.auto = function () {
+    if (this.hold) return {}; // screenshot of a static screen
+    if (this.scr === 'title') return { _fire: true, fire: true };
+    if (this.scr === 'over') return {};
+    return this.seq && this.seq.auto ? this.seq.auto() : {};
+  };
+  /* joystick forward = dive, back = climb (original); the Arcade option swaps it */
+  K.dive = function (I) {
+    const up = I.is('up'), down = I.is('down');
+    return this.invert ? (up ? 1 : down ? -1 : 0) : (up ? -1 : down ? 1 : 0);
+  };
 
   K.update = function (dt, I) {
     this.t += dt;
-    if (this.alert) { this.alert.t -= dt; if (this.alert.t <= 0) this.alert = null; }
-    switch (this.scr) {
-      case 'title':
-        if (this.t < 0.4) break; // ignore the key press that opened this mode
-        if (I.hit('left')) { this.skill = Math.max(0, this.skill - 1); A.sfx('select'); ROM.store.set('classicSkill', this.skill); }
-        if (I.hit('right')) { this.skill = Math.min(2, this.skill + 1); A.sfx('select'); ROM.store.set('classicSkill', this.skill); }
-        if (I.hit('fire') || I.hit('start')) { A.sfx('select'); this.newGame(); this.scr = 'map'; this.mapT = 0; A.stopMusic(); }
-        break;
-      case 'map':
-        this.mapT += dt;
-        if (this.mapT > 0.6 && (I.hit('fire') || I.hit('start'))) { A.sfx('select'); this.after = 'flight'; this.startLevel('hangar'); }
-        break;
-      case 'msg':
-        this.msg.t -= dt;
-        if (this.msg.t <= 0) { const f = this.msg.then; this.msg = null; f(); }
-        break;
-      case 'level': {
-        const air = this.levelName === 'hangar' || this.levelName === 'flight';
-        if (air && !this.tgt().final && this.game.state !== 'shot') {
-          this.launchT -= dt;
-          if (this.launchT <= 0) { this.launchT = 75; this.cityLost(); }
-        }
-        this.lv.update(dt, I);
-        break;
-      }
-      case 'over':
-      case 'win':
-        this.endT += dt;
-        if (this.endT > 1.5 && (I.hit('fire') || I.hit('start'))) { this.scr = 'title'; A.music('title'); }
-        break;
-      default: break;
+    if (this.scr === 'title') {
+      const before = this.lvl;
+      if (this.fkey('F1')) this.lvl = 0;
+      if (this.fkey('F3')) this.lvl = 1;
+      if (this.fkey('F5')) this.lvl = 2;
+      if (I.hit('left')) this.lvl = Math.max(0, this.lvl - 1);
+      if (I.hit('right')) this.lvl = Math.min(2, this.lvl + 1);
+      if (this.lvl !== before) { ROM.store.set('classicLevel', this.lvl); A.sfx('select'); }
+      if (this.fkey('C') || I.hit('down') || I.hit('up')) { this.invert = !this.invert; ROM.store.set('classicArcade', this.invert); A.sfx('select'); }
+      if (this.t > 0.4 && (I.hit('fire') || I.hit('start'))) { A.sfx('select'); this.newGame(); }
+      return;
     }
+    if (this.scr === 'over') {
+      this.overT += dt;
+      if (this.overT > 1.5 && (I.hit('fire') || I.hit('start'))) { this.scr = 'title'; this.t = 0; A.music('title'); }
+      return;
+    }
+    if (this.seq.timed !== false) this.tickLaunch(dt);
+    if (this.scr === 'over') return;
+    this.seq.update(dt, I);
   };
 
-  /* ---------- drawing ---------- */
   K.draw = function (ctx) {
     c = this.cx;
     c.setTransform(BS, 0, 0, BS, 0, 0);
     c.imageSmoothingEnabled = true;
-    let border = '#000000';
-    switch (this.scr) {
-      case 'title': this.drawTitle(); border = PAL.B; break;
-      case 'map': this.drawMap(); border = PAL.B; break;
-      case 'msg':
-        if (this.lv) { this.lv.draw(); this.drawHud(); }
-        else rect(0, 0, W, H, 'k');
-        this.drawMsg();
-        break;
-      case 'level': this.lv.draw(); this.drawHud(); break;
-      case 'over': this.drawOver(); border = PAL.r; break;
-      case 'win': this.drawWin(); border = blink(this.t, 4) ? PAL.y : PAL.B; break;
-      default: break;
+    rect(0, 0, W, H, 'k');
+    if (this.scr === 'title') this.drawTitle();
+    else if (this.scr === 'over') this.drawOver();
+    else {
+      c.save(); c.beginPath(); c.rect(0, 0, W, PF); c.clip();
+      this.seq.draw();
+      c.restore();
+      rect(0, PF, W, H - PF, 'k');
+      this.seq.hud();
     }
-    if (this.alert && this.scr !== 'title') {
-      rect(0, 70, W, 34, 'k');
-      rect(0, 70, W, 1, 'R'); rect(0, 103, W, 1, 'R');
-      text(this.alert.text, W / 2, 76, blink(this.t, 4) ? 'R' : 'w', 'center');
-      text(this.alert.text2, W / 2, 90, 'y', 'center');
-    }
-    // blit with C64 border
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const cw = ctx.canvas.width, ch = ctx.canvas.height;
-    ctx.fillStyle = border;
+    ctx.fillStyle = P.N;
     ctx.fillRect(0, 0, cw, ch);
-    const s = Math.min(cw / (W + 32), ch / (H + 20));
+    const s = Math.min(cw / (W + 40), ch / (H + 28));
     const dw = W * s, dh = H * s;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.cv, Math.round((cw - dw) / 2), Math.round((ch - dh) / 2), Math.round(dw), Math.round(dh));
     ctx.restore();
   };
 
-  K.drawHud = function () {
-    rect(0, PH, W, H - PH, 'k');
-    rect(0, PH, W, 1, 'b');
-    text('SC' + String(this.score).padStart(6, '0'), 2, PH + 5, 'w');
-    // planes / soldiers
-    const ground = this.levelName === 'kremlin' || this.levelName === 'reactor';
-    for (let i = 0; i < Math.min(this.planes, 6); i++) {
-      if (ground) drawSoldier(74 + i * 7, PH + 3, 0, 'B', 'b');
-      else { rect(76 + i * 9, PH + 8, 7, 2, 'l'); rect(78 + i * 9, PH + 6, 2, 6, 'l'); }
+  K.aircraftRow = function (r, men) {
+    text(men ? 'MEN' : 'AIRCRAFT', 0, row(r), 'y');
+    if (men) {
+      for (let i = 0; i < Math.min(8, this.men || 0); i++) blit(figure('w'), 70 + i * 13, row(r) + 4, { sc: 0.8 });
+    } else {
+      let i = 0;
+      const active = this.seq && this.seq.flying ? 1 : 0;
+      for (let j = 0; j < active && i < 10; j++, i++) planeIcon(68 + i * 12, row(r), 'w');
+      for (let j = 0; j < this.out && i < 10; j++, i++) planeIcon(68 + i * 12, row(r), 'l');
+      for (let j = 0; j < this.station && i < 10; j++, i++) planeIcon(68 + i * 12, row(r), 'o');
     }
-    text('USA', 132, PH + 5, 'B');
-    for (let i = 0; i < 6; i++) rect(158 + i * 5, PH + 5, 3, 7, i < this.cities.length ? 'B' : 'r');
-    if (this.levelName === 'hangar' || this.levelName === 'flight') {
-      if (this.tgt().final) text('MOSCOW', W - 2, PH + 5, 'R', 'right');
-      else {
-        const s = Math.max(0, Math.ceil(this.launchT));
-        const str = 'T-' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-        text(str, W - 2, PH + 5, s < 30 && blink(this.t, 3) ? 'R' : 'y', 'right');
-      }
-    } else text(this.tgt().name.slice(0, 7), W - 2, PH + 5, 'y', 'right');
+    text('SCORE:', 208, row(r), 'C');
+    text(pad(this.score, 6), 320, row(r), 'w', 'right');
+  };
+  K.impactRow = function (r) {
+    text('TIME TO IMPACT:', 0, row(r), 'G');
+    if (this.launch && !this.final) text(clock(this.launch.t, true), 128, row(r), this.launch.t < 30 && blink(this.t, 3) ? 'R' : 'w');
+    else text('--:--.-', 128, row(r), 'w');
   };
 
-  K.drawMsg = function () {
-    const m = this.msg;
-    const h = m.lines.length * 12 + 16;
-    const y = Math.round(80 - h / 2);
-    rect(24, y, W - 48, h, 'k');
-    rect(24, y, W - 48, 1, m.col); rect(24, y + h - 1, W - 48, 1, m.col);
-    m.lines.forEach((l, i) => text(l, W / 2, y + 8 + i * 12, i === 0 ? m.col : 'w', 'center'));
-  };
-
-  K.drawKremlinSkyline = function (y0, k1, k2) {
-    // crude pixel Kremlin silhouette for title/win screens
-    rect(0, y0 + 30, W, 40, k1);
-    for (let x = 0; x < W; x += 8) rect(x, y0 + 26, 5, 4, k1);
-    const towers = [[30, 18, 36], [100, 18, 30], [160, 26, 54], [220, 18, 30], [290, 18, 36]];
-    for (const [x, w, h] of towers) {
-      rect(x - w / 2, y0 + 30 - h, w, h, k1);
-      for (let i = 0; i < 16; i++) rect(x - (w / 2) * (1 - i / 16), y0 + 30 - h - i, w * (1 - i / 16), 1, k2);
-      rect(x - 1, y0 + 30 - h - 22, 3, 5, 'R');
-    }
-    rect(155, y0 - 6, 10, 10, 'w'); rect(159, y0 - 4, 1, 4, 'k'); rect(159, y0, 4, 1, 'k');
-  };
-
+  /* ---------- title (after the C64 menu screen) ---------- */
   K.drawTitle = function () {
-    rect(0, 0, W, H, 'b');
-    for (const [x, y, k] of this.stars) if (y < 110) rect(x, y, 1, 1, blink(this.t + x, 0.5) ? k : 'b');
-    this.drawKremlinSkyline(128, 'r', 'g');
-    rect(0, 158, W, 42, 'k');
-    c.save();
-    c.font = '16px "Press Start 2P", monospace'; c.textAlign = 'center'; c.textBaseline = 'top';
-    c.fillStyle = PAL.k; c.fillText('RAID OVER', W / 2 + 2, 20); c.fillText('MOSCOW', W / 2 + 2, 42);
-    c.fillStyle = PAL.R; c.fillText('RAID OVER', W / 2, 18);
-    c.fillStyle = PAL.y; c.fillText('MOSCOW', W / 2, 40);
-    c.restore();
-    text('1984 MODE', W / 2, 64, 'w', 'center');
-    text('A TRIBUTE TO ACCESS SOFTWARE', W / 2, 78, 'c', 'center');
-    const sk = ['CADET', 'PILOT', 'ACE'][this.skill];
-    text('SKILL  < ' + sk + ' >', W / 2, 164, 'w', 'center');
-    text('HIGH SCORE ' + String(this.hi).padStart(6, '0'), W / 2, 176, 'c', 'center');
-    if (blink(this.t, 1.5)) text('PRESS FIRE TO BEGIN', W / 2, 188, 'y', 'center');
-  };
-
-  K.drawMap = function () {
-    rect(0, 0, W, H, 'k');
-    text('STRATEGIC COMMAND', W / 2, 4, 'c', 'center');
-    // sea and land masses (crude western USSR)
-    rect(8, 16, 304, 140, 'b');
-    c.fillStyle = PAL.g;
-    c.beginPath();
-    const land = [[8, 70], [30, 60], [60, 66], [80, 56], [88, 42], [70, 30], [90, 18], [140, 22], [180, 16], [240, 22], [312, 18], [312, 156], [250, 156], [252, 128], [234, 120], [226, 140], [176, 150], [150, 132], [110, 136], [90, 150], [8, 150]];
-    land.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
-    c.closePath(); c.fill();
-    // border lines
-    // station
-    rect(12, 20, 12, 4, 'l'); rect(16, 16, 4, 12, 'l'); text('STN', 28, 18, 'l');
-    TARGETS.forEach((T, i) => {
-      const done = i < this.target, cur = i === this.target;
-      const k = done ? 'd' : cur ? (blink(this.t, 3) ? 'R' : 'y') : 'w';
-      rect(T.x - 2, T.y - 2, 5, 5, k);
-      if (done) { rect(T.x - 3, T.y, 7, 1, 'R'); rect(T.x, T.y - 3, 1, 7, 'R'); }
-      text(T.name.slice(0, 9), T.x + 5, T.y - 3, done ? 'd' : 'w');
+    const sx = 160, sy = 20;
+    c.save(); c.translate(sx, sy); c.beginPath();
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 5 : 12; c.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    c.closePath(); c.fillStyle = P.O; c.fill(); c.strokeStyle = P.n; c.lineWidth = 1; c.stroke(); c.restore();
+    const logo = (s, y, face, top, side, size) => {
+      c.font = size + 'px "Press Start 2P", monospace'; c.textAlign = 'center'; c.textBaseline = 'top';
+      for (let i = 5; i >= 1; i--) { c.fillStyle = col(side); c.fillText(s, 160 + i * 0.7, y + i * 0.9); }
+      c.fillStyle = col(top); c.fillText(s, 160, y - 0.6);
+      c.fillStyle = col(face); c.fillText(s, 160, y);
+    };
+    logo('RAID OVER', 40, 'L', 'w', 'b', 16);
+    logo('MOSCOW', 60, 'y', 'w', 'n', 22);
+    text('HIGH SCORE', 96, 98, 'C', 'center'); text('YOUR SCORE', 224, 98, 'C', 'center');
+    text(pad(this.hi, 6), 96, 107, 'w', 'center'); text(pad(this.score, 6), 224, 107, 'w', 'center');
+    [['F1', 'BEGINNER', 'G'], ['F3', 'ADVANCED', 'O'], ['F5', 'SUICIDAL', 'R']].forEach(([k, n, cl], i) => {
+      const x = 14 + i * 102;
+      rect(x, 121, 18, 10, i === this.lvl ? 'y' : 'D');
+      text(k, x + 2, 122, 'k');
+      text(n, x + 21, 122, i === this.lvl ? cl : 'D');
     });
-    // flight path
-    const T = this.tgt();
-    const n = 24;
-    for (let i = 0; i < n; i++) {
-      if ((i + Math.floor(this.mapT * 8)) % 3) continue;
-      rect(18 + (T.x - 18) * (i / n), 22 + (T.y - 22) * (i / n), 2, 2, 'y');
-    }
-    rect(0, 158, W, 42, 'k');
-    text('MISSION ' + (this.target + 1) + ': ' + T.name, 4, 160, 'y');
-    if (T.final) text('DESTROY THE DEFENSE CENTER', 4, 172, 'w');
-    else {
-      const s = Math.ceil(this.launchT);
-      text('ICBM LAUNCH IN ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'), 4, 172, 'R');
-    }
-    text('USA ' + this.cities.length, W - 4, 160, 'B', 'right');
-    if (blink(this.t, 1.5) && this.mapT > 0.6) text('FIRE TO LAUNCH', W - 4, 188, 'w', 'right');
+    text('JOYSTICK: ' + (this.invert ? 'ARCADE (UP=CLIMB)' : 'PILOT (UP=DIVE)'), 160, 138, 'l', 'center');
+    text('A TRIBUTE TO ACCESS SOFTWARE 1984', 160, 152, 'D', 'center');
+    if (blink(this.t, 1.4)) text('PRESS FIRE TO BEGIN', 160, 172, 'w', 'center');
+    text('C = CONTROLS   ESC = MENU', 160, 188, 'D', 'center');
   };
-
   K.drawOver = function () {
-    rect(0, 0, W, H, 'k');
-    for (const [x, y, k] of this.stars) rect(x, y, 1, 1, k);
-    c.save();
+    for (const [x, y] of this.stars) rect(x, y * 2, 1, 1, 'l');
     c.font = '16px "Press Start 2P", monospace'; c.textAlign = 'center'; c.textBaseline = 'top';
-    c.fillStyle = PAL.R; c.fillText('GAME OVER', W / 2, 56);
-    c.restore();
-    text(this.overWhy, W / 2, 88, 'w', 'center');
-    text('SCORE ' + String(this.score).padStart(6, '0'), W / 2, 112, 'y', 'center');
-    text('HIGH  ' + String(this.hi).padStart(6, '0'), W / 2, 126, 'c', 'center');
-    if (this.endT > 1.5 && blink(this.t, 1.5)) text('PRESS FIRE', W / 2, 160, 'w', 'center');
-  };
-
-  K.drawWin = function () {
-    rect(0, 0, W, H, 'k');
-    for (const [x, y, k] of this.stars) if (y < 120) rect(x, y, 1, 1, k);
-    // fireworks over the Kremlin
-    for (let i = 0; i < 5; i++) {
-      const ph = (this.t * 0.7 + i * 0.37) % 1;
-      const fx = 40 + ((i * 71) % 240), fy = 30 + ((i * 37) % 50);
-      const k = ['y', 'R', 'G', 'c', 'w'][i];
-      for (let a = 0; a < 12; a++) {
-        const an = a / 12 * Math.PI * 2;
-        rect(fx + Math.cos(an) * ph * 24, fy + Math.sin(an) * ph * 24 + ph * ph * 10, 1, 1, ph < 0.8 ? k : 'd');
-      }
-    }
-    this.drawKremlinSkyline(128, 'r', 'g');
-    rect(0, 136, W, 64, 'k');
-    text('MISSION ACCOMPLISHED', W / 2, 140, blink(this.t, 4) ? 'y' : 'w', 'center');
-    text('U.S. CITIES SAVED ' + this.cities.length, W / 2, 154, 'B', 'center');
-    text('BONUS ' + this.winBonus + '  SCORE ' + this.score, W / 2, 166, 'w', 'center');
-    if (this.endT > 1.5 && blink(this.t, 1.5)) text('PRESS FIRE', W / 2, 184, 'c', 'center');
+    c.fillStyle = P.R; c.fillText('GAME OVER', 160, 50);
+    text(this.overWhy, 160, 84, 'w', 'center');
+    text('SCORE ' + pad(this.score, 6), 160, 104, 'y', 'center');
+    text('HIGH  ' + pad(this.hi, 6), 160, 116, 'C', 'center');
+    if (this.overT > 1.5 && blink(this.t, 1.4)) text('PRESS FIRE', 160, 150, 'w', 'center');
   };
 
   /* =====================================================================
-     LEVEL 1 — Hangar launch (side view)
+     SEQUENCE I — SAC headquarters: orbital overview
      ===================================================================== */
-  const FLOOR = 150, CEIL = 26, DOOR_X = 286, SILL = 138;
+  function Sac(k, mode, hit) {
+    this.k = k; this.mode = mode; this.t = 0; this.hit = hit;
+    if (mode === 'nav') this.dot = { x: STATION[0], y: STATION[1] + 8 };
+  }
+  Sac.prototype.target = function () { return SITES[this.k.siteName()]; };
+  Sac.prototype.update = function (dt, I) {
+    this.t += dt;
+    const k = this.k;
+    if (this.mode === 'impact') {
+      if (this.t > 4) {
+        this.mode = k.out > 0 ? 'nav' : 'alert'; this.t = 0;
+        if (this.mode === 'nav') this.dot = { x: STATION[0], y: STATION[1] + 8 };
+      }
+      return;
+    }
+    if (this.mode === 'alert' || this.mode === 'final') {
+      if (this.t > 0.6 && (I.hit('fire') || I.hit('start'))) { A.sfx('door'); k.enterStation(); }
+      return;
+    }
+    // guide the flashing aircraft to the launch site
+    const d = this.dot, T = this.target();
+    const sp = 42;
+    if (I.is('left')) d.x -= sp * dt;
+    if (I.is('right')) d.x += sp * dt;
+    if (I.is('up')) d.y -= sp * dt;
+    if (I.is('down')) d.y += sp * dt;
+    d.x = clamp(d.x, 2, 318); d.y = clamp(d.y, 4, 156);
+    if (Math.hypot(d.x - T[0], d.y - T[1]) < 6) { A.sfx('alarm'); k.navArrive(); return; }
+    const nearStation = Math.hypot(d.x - STATION[0], d.y - STATION[1]) < 26;
+    if (nearStation && k.station > 0 && this.t > 0.5 && (I.hit('fire') || I.hit('bomb'))) { A.sfx('door'); k.go(new Hangar(k)); }
+  };
+  Sac.prototype.auto = function () {
+    if (this.mode !== 'nav') return { _fire: true };
+    const T = this.target(), d = this.dot;
+    return { left: d.x > T[0] + 1, right: d.x < T[0] - 1, up: d.y > T[1] + 1, down: d.y < T[1] - 1 };
+  };
+  Sac.prototype.draw = function () {
+    const k = this.k;
+    for (const [x, y, br] of k.stars) rect(x, y, 1, 1, br ? 'w' : 'D');
+    const ocean = [];
+    for (let x = 0; x <= 320; x += 8) ocean.push([x, horizon(x)]);
+    ocean.push([320, 160], [0, 160]);
+    poly(ocean, 'B');
+    for (const [k2, pts] of LAND) poly(pts, k2);
+    for (let x = 6; x < 320; x += 9) if ((x < 120 || (x > 150 && x < 260)) && (x * 7) % 5 < 3) rect(x, horizon(x) - 1.5, 6, 2, 'w');
+    for (const name in US) {
+      const [x, y] = US[name];
+      const hitC = k.hits.includes(name);
+      poly([[x, y - 2], [x + 2.5, y + 1.5], [x - 2.5, y + 1.5]], hitC ? (blink(this.t, 3) ? 'R' : 'r') : 'k');
+    }
+    for (const name in SITES) {
+      const [x, y] = SITES[name];
+      const active = name === k.siteName();
+      const dead = name !== 'MOSCOW' && !k.alive[name];
+      if (dead) { line(x - 2, y - 2, x + 2, y + 2, 'k'); line(x + 2, y - 2, x - 2, y + 2, 'k'); continue; }
+      poly([[x, y - 2], [x + 3, y + 1.5], [x - 3, y + 1.5]], active ? (blink(this.t, 4) ? 'w' : 'l') : 'k');
+    }
+    blit(station(), STATION[0], STATION[1]);
+    const L = this.hit || k.launch;
+    if (L && !k.final) {
+      const f = this.mode === 'impact' ? Math.min(1, 0.7 + this.t / 3) : 1 - L.t / L.t0;
+      const [x0, y0] = SITES[L.site], [x1, y1] = US[L.target];
+      const x = x0 + (x1 - x0) * f, y = y0 + (y1 - y0) * f - Math.sin(Math.PI * f) * 58;
+      for (let i = 0; i < 4; i++) rect(x + (i % 2) * 2 - 1, y + (i >> 1) * 2 - 1, 1, 1, 'w');
+      if (this.mode === 'impact' && this.t > 0.9) {
+        const r = Math.min(9, (this.t - 0.9) * 10);
+        ell(x1, y1, r, r * 0.6, blink(this.t, 8) ? 'w' : 'y');
+      }
+    }
+    if (this.dot && blink(this.t, 4)) rect(this.dot.x - 1, this.dot.y - 1, 3, 3, 'w');
+    if (this.mode === 'alert' || this.mode === 'final') { if (blink(this.t, 1.5)) text('PRESS FIRE TO ENTER STATION', 160, 34, 'w', 'center'); }
+    else if (this.mode === 'nav') {
+      text('GUIDE AIRCRAFT TO ' + k.siteName(), 160, 32, 'G', 'center');
+      if (k.station > 0 && Math.hypot(this.dot.x - STATION[0], this.dot.y - STATION[1]) < 26) text('FIRE: TAKE OUT ANOTHER PLANE', 160, 44, 'l', 'center');
+    }
+  };
+  Sac.prototype.hud = function () {
+    const k = this.k;
+    if (this.mode === 'impact') {
+      text('CONFIRMATION:', 0, row(0), 'G'); text('NUCLEAR DETONATION', 128, row(0), blink(this.t, 3) ? 'R' : 'r');
+      text('LAUNCH SITE:', 0, row(1), 'G'); text(this.hit.site, 128, row(1), 'o');
+      text('TARGET HIT:', 0, row(2), 'G'); text(this.hit.target, 128, row(2), 'y');
+      text('U.S. CITIES HIT:', 0, row(3), 'G'); text(k.impacts + ' OF ' + k.maxImpacts, 136, row(3), 'w');
+    } else if (k.final) {
+      text('CONFIRMATION:', 0, row(0), 'G'); text('SITES DESTROYED', 128, row(0), 'G');
+      text('NEXT TARGET:', 0, row(1), 'G'); text('MOSCOW', 128, row(1), 'o');
+      text('OBJECTIVE:', 0, row(2), 'G'); text('DEFENSE CENTER', 128, row(2), 'y');
+      k.impactRow(3);
+    } else {
+      text('CONFIRMATION:', 0, row(0), 'G'); text('ENEMY LAUNCH DETECTED', 128, row(0), 'G');
+      text('LAUNCH SITE:', 0, row(1), 'G'); text(k.launch.site, 128, row(1), 'o');
+      text('TARGET:', 0, row(2), 'G'); text(k.launch.target, 128, row(2), 'y');
+      k.impactRow(3);
+    }
+    k.aircraftRow(4);
+  };
+
+  /* =====================================================================
+     SEQUENCE II — the space station hangar (semi-weightless flight)
+     ===================================================================== */
+  const HW = 250, HL = 400, WH = 180, DW = 44, DH = 64;
+  const hp = (X, Y, Z) => { const s = 300 / (Y + 300); return [160 + X * s, -63 + 223 * s - Z * s, s]; };
+  const SLOTS = [[205, 60], [205, 85], [180, 135], [180, 160], [150, 215], [150, 240], [122, 300], [122, 325]];
   function Hangar(k) {
     this.k = k; this.t = 0; this.booms = new Booms();
-    this.x = 22; this.y = FLOOR - 6; this.vx = 0; this.state = 'ready';
-    this.ph = Math.random() * 6;
+    this.X = 0; this.Y = 130; this.Z = 0; this.vx = 0; this.vy = 0; this.vz = 0; this.th = 0;
+    this.door = 0; this.doorT = 0;
+    this.state = 'intro';
   }
-  Hangar.prototype.doorBot = function () {
-    const sp = 0.9 + this.k.skill * 0.25;
-    const open = (Math.sin(this.t * sp + this.ph) + 1) / 2;
-    return SILL - open * 104;
-  };
   Hangar.prototype.update = function (dt, I) {
     this.t += dt;
     this.booms.update(dt);
-    if (this.state === 'dead') { this.deadT += dt; if (this.deadT > 1.6 && !this.rep) { this.rep = true; this.k.die(); } return; }
-    if (this.state === 'out') { this.x += this.vx * dt; this.outT += dt; if (this.outT > 0.6 && !this.rep) { this.rep = true; this.k.levelDone(250); } return; }
-    if (I.is('fire') || I.is('right')) { this.state = 'roll'; this.vx = Math.min(115, this.vx + 60 * dt); }
-    else if (I.is('left')) this.vx = Math.max(0, this.vx - 80 * dt);
-    else this.vx = Math.max(0, this.vx - 8 * dt);
-    if (this.vx > 65) {
-      if (I.is('up')) this.y -= 42 * dt;
-      if (I.is('down')) this.y += 42 * dt;
-    } else if (this.y < FLOOR - 6) this.y += 30 * dt;
-    this.y = Math.min(FLOOR - 6, this.y);
-    this.x += this.vx * dt;
-    A.engine(this.vx > 0, 0.8 + this.vx / 150);
-    let hit = this.y < CEIL;
-    if (this.x + 15 > DOOR_X && this.x < DOOR_X + 16) {
-      if (this.y < this.doorBot() || this.y + 6 > SILL) hit = true;
+    const k = this.k;
+    if (this.doorT > 0) { this.doorT -= dt; this.door = Math.min(1, this.door + dt * 1.6); } else this.door = Math.max(0, this.door - dt * 1.2);
+    if (this.state === 'intro') { if (this.t > 1.8) this.state = 'fly'; return; }
+    if (this.state === 'crash') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.hangarCrash(); } return; }
+    if (this.state === 'out') { this.Y += 140 * dt; this.ct += dt; if (this.ct > 0.8 && !this.rep) { this.rep = true; k.hangarDone(); } return; }
+    if (I.is('left')) this.th -= 2.4 * dt;
+    if (I.is('right')) this.th += 2.4 * dt;
+    const eng = I.is('up'), thr = I.is('fire');
+    if (eng) { this.vx += Math.sin(this.th) * 42 * dt; this.vy += Math.cos(this.th) * 42 * dt; }
+    if (thr) this.vz += 32 * dt;
+    this.vz -= 9 * dt;
+    A.engine(eng || thr, eng ? 1.4 : 1);
+    if ((I.hit('bomb') || k.fkey('F7')) && this.Z > 0.5) { this.doorT = 7 - k.lvl * 1.5; A.sfx('door'); }
+    this.X += this.vx * dt; this.Y += this.vy * dt; this.Z += this.vz * dt;
+    const god = k.game.god;
+    if (this.Z <= 0) {
+      if (this.vz < -16 && !god) return this.crash('HIT THE DECK TOO HARD');
+      this.Z = 0; this.vz = 0;
+      this.vx *= 1 - 1.5 * dt; this.vy *= 1 - 1.5 * dt;
     }
-    if (hit && !this.k.game.god) {
-      this.state = 'dead'; this.deadT = 0;
-      this.booms.add(this.x + 8, this.y + 3, 2);
-      A.sfx('bigboom'); A.engine(false);
-      return;
+    if (!god) {
+      if (Math.abs(this.X) > HW - 10 || this.Y < 6) return this.crash('HIT THE HANGAR WALL');
+      if (this.Z > WH - 8) return this.crash('HIT THE CEILING');
+      if (this.Y > HL - 8 && !(this.door > 0.9 && Math.abs(this.X) < DW - 10 && this.Z < DH - 8)) return this.crash(this.door > 0.9 ? 'MISSED THE DOORWAY' : 'HIT THE HANGAR DOORS');
     }
-    if (this.x > DOOR_X + 18) { this.state = 'out'; this.outT = 0; }
+    if (this.Y > HL + 20) { this.state = 'out'; this.ct = 0; A.engine(false); }
+  };
+  Hangar.prototype.crash = function (why) {
+    this.state = 'crash'; this.ct = 0; this.why = why;
+    const [x, y] = hp(this.X, this.Y, this.Z);
+    this.booms.add(x, y, 2.2);
+    A.sfx('bigboom'); A.engine(false);
   };
   Hangar.prototype.auto = function () {
-    const a = { fire: true };
-    const target = (Math.max(CEIL, this.doorBot()) + SILL) / 2 - 3;
-    if (this.vx > 70) { if (this.y > target + 2) a.up = true; else if (this.y < target - 2) a.down = true; }
+    const a = {};
+    if (this.state !== 'fly') return a;
+    a.fire = this.Z < 24 && this.vz < 6;
+    if (this.Z > 2 && this.doorT <= 0 && this.Y > 160) a._bomb = true;
+    const want = Math.atan2(-this.X - this.vx * 1.5, HL + 60 - this.Y);
+    let d = want - this.th;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    if (d > 0.06) a.right = true; else if (d < -0.06) a.left = true;
+    const along = this.vx * Math.sin(this.th) + this.vy * Math.cos(this.th);
+    a.up = Math.abs(d) < 0.3 && along < (this.door > 0.8 || this.Y < 250 ? 60 : 10) && this.Z > 6;
     return a;
   };
   Hangar.prototype.draw = function () {
-    // space outside
-    rect(0, 0, W, PH, 'k');
-    for (const [x, y] of this.k.stars) if (x > DOOR_X + 10) rect(x, y, 1, 1, 'w');
-    circle(360, 250, 120, 'b'); circle(360, 250, 112, 'B');
-    // hangar interior
-    rect(0, CEIL, DOOR_X, FLOOR - CEIL, 'd');
-    for (let x = 10; x < DOOR_X; x += 40) { rect(x, CEIL, 4, FLOOR - CEIL, 'm'); rect(x + 14, 60, 12, 4, blink(this.t + x, 1) ? 'c' : 'B'); }
-    rect(0, 0, DOOR_X + 18, CEIL, 'm');
-    for (let x = 0; x < DOOR_X + 18; x += 12) { rect(x, CEIL - 6, 12, 1, 'd'); rect(x, CEIL - 6, 1, 6, 'd'); }
-    rect(0, FLOOR, DOOR_X + 18, PH - FLOOR, 'l');
-    rect(0, FLOOR, DOOR_X + 18, 2, 'w');
-    for (let x = 6; x < DOOR_X; x += 24) rect(x, FLOOR + 6, 12, 2, 'y');
-    // door: frame, panel and sill
-    const db = this.doorBot();
-    rect(DOOR_X, CEIL, 16, Math.max(0, db - CEIL), 'o');
-    for (let y = CEIL + 4; y < db - 2; y += 8) rect(DOOR_X, y, 16, 1, 'n');
-    for (let x = 0; x < 16; x += 4) rect(DOOR_X + x, db - 3, 2, 3, x % 8 ? 'k' : 'y');
-    rect(DOOR_X, SILL, 16, FLOOR - SILL, 'o');
-    rect(DOOR_X, SILL, 16, 2, 'y');
-    rect(DOOR_X + 16, 0, 2, PH, 'm');
-    // planes parked in the back (the squadron)
-    c.globalAlpha = 0.55;
-    for (let i = 0; i < Math.min(4, this.k.planes - 1); i++) { rect(36 + i * 50, 52, 26, 2, 'm'); blit(planeSpr('m', 'd', 'b'), 40 + i * 50, 44, false, 1.4); }
-    c.globalAlpha = 1;
-    // player
-    if (this.state !== 'dead') {
-      blit(planeSpr('l', 'm', 'B'), this.x, this.y, false, 1.4);
-      if (this.vx > 10) rect(this.x - 3 - Math.random() * 3, this.y + 3, 3, 1, blink(this.t, 12) ? 'y' : 'o');
+    const k = this.k;
+    rect(0, 0, W, PF, 'w');
+    const q = (a, b, cc, d, kk) => poly([hp(...a), hp(...b), hp(...cc), hp(...d)], kk);
+    q([-HW, 0, WH], [HW, 0, WH], [HW, HL, WH], [-HW, HL, WH], 'N');
+    q([-HW, 0, 0], [-HW, HL, 0], [-HW, HL, WH], [-HW, 0, WH], 'w');
+    q([HW, 0, 0], [HW, HL, 0], [HW, HL, WH], [HW, 0, WH], 'w');
+    q([-HW, HL, 0], [HW, HL, 0], [HW, HL, WH], [-HW, HL, WH], 'w');
+    for (const side of [-1, 1]) {
+      for (let Y = 0; Y <= HL; Y += 100) { const a = hp(side * HW, Y, 0), b = hp(side * HW, Y, WH); line(a[0], a[1], b[0], b[1], 'N', 6 * a[2]); }
+      const a = hp(side * HW, 0, 140), b = hp(side * HW, HL, 140); line(a[0], a[1], b[0], b[1], 'N', 5);
+      for (let Y = 20; Y < HL; Y += 50) { const p = hp(side * HW, Y, 140); rect(p[0] - 1, p[1] - 1, 2.5 * p[2] + 1, 1.5, 'w'); }
+    }
+    for (let X = -HW; X <= HW; X += 100) { const a = hp(X, HL, 0), b = hp(X, HL, WH); line(a[0], a[1], b[0], b[1], 'N', 6 * a[2]); }
+    { const a = hp(-HW, HL, 140), b = hp(HW, HL, 140); line(a[0], a[1], b[0], b[1], 'N', 4); }
+    // doorway into space; the door leaves slide apart
+    const d0 = hp(-DW, HL, 0), d1 = hp(DW, HL, DH);
+    rect(d0[0], d1[1], d1[0] - d0[0], d0[1] - d1[1], 'k');
+    for (let i = 0; i < 6; i++) rect(d0[0] + ((i * 37) % (d1[0] - d0[0])), d1[1] + ((i * 23) % (d0[1] - d1[1])), 1, 1, 'w');
+    const dw = ((d1[0] - d0[0]) / 2) * (1 - this.door);
+    rect(d0[0], d1[1], dw, d0[1] - d1[1], 'l'); rect(d1[0] - dw, d1[1], dw, d0[1] - d1[1], 'l');
+    if (this.doorT > 0 && this.doorT < 2 && blink(this.t, 6)) rect(d0[0], d1[1] - 3, d1[0] - d0[0], 2, 'R');
+    // floor and markings
+    q([-HW, 0, 0], [HW, 0, 0], [HW, HL, 0], [-HW, HL, 0], 'd');
+    for (let X = -HW + 10; X < HW; X += 34) { const a = hp(X, 22, 0); rect(a[0], a[1], 6 * a[2], 1.5, 'y'); }
+    const pad0 = [[-36, 105], [36, 105], [36, 160], [-36, 160]].map(([x, y]) => hp(x, y, 0));
+    c.setLineDash([3, 2]);
+    for (let i = 0; i < 4; i++) { const a = pad0[i], b = pad0[(i + 1) % 4]; line(a[0], a[1], b[0], b[1], 'w', 1); }
+    c.setLineDash([]);
+    { const a = hp(-8, 132, 0), b = hp(8, 132, 0), e = hp(0, 125, 0), f = hp(0, 139, 0); line(a[0], a[1], b[0], b[1], 'w'); line(e[0], e[1], f[0], f[1], 'w'); }
+    for (let Y = 185; Y < HL - 10; Y += 32) { const a = hp(0, Y, 0), b = hp(0, Y + 14, 0); line(a[0], a[1], b[0], b[1], 'w', 2.2 * a[2]); }
+    // parked fighters
+    for (let i = 0; i < Math.min(8, Math.max(0, k.station - 1)); i++) {
+      const [X, Y] = SLOTS[i];
+      const [x, y, s] = hp(X, Y, 0);
+      ell(x + 1, y + 1, 6 * s * 1.6, 2.5 * s * 1.6, 'k');
+      blit(topPlane('y'), x, y - 2 * s, { rot: -Math.PI / 2, sc: s * 1.25 });
+    }
+    if (this.state === 'intro') {
+      const f = Math.min(1, this.t / 1.5);
+      const [x, y, s] = hp(-170 + 160 * f, 60 + 60 * f, 0);
+      blit(figure('k'), x, y - 4 * s, { sc: s * 1.2 });
+    }
+    if (this.state !== 'crash') {
+      const [sx, sy, ss] = hp(this.X, this.Y, 0);
+      ell(sx, sy, 7 * ss * 1.4, 2.6 * ss * 1.4, 'k');
+      const [x, y, s] = hp(this.X, this.Y, this.Z);
+      blit(topPlane('y'), x, y - 3 * s, { rot: this.th, sc: s * 1.35 });
+      if (this.state === 'fly' && this.vz > 0 && blink(this.t, 14)) ell(x, y + 3 * s, 2 * s, 1 * s, 'o');
     }
     this.booms.draw();
-    // speed gauge
-    rect(4, 4, 62, 14, 'k');
-    text('SPD', 6, 7, 'w');
-    rect(32, 8, 30, 6, 'd'); rect(32, 8, Math.min(30, this.vx / 115 * 30), 6, this.vx > 65 ? 'G' : 'y');
-    if (this.state === 'ready' && blink(this.t, 2)) text('FIRE: THROTTLE', W / 2 - 10, 40, 'y', 'center');
-    if (this.state === 'roll' && this.vx > 65 && this.y >= FLOOR - 7) text('PULL UP!', W / 2 - 10, 40, 'G', 'center');
+    if (this.state === 'intro') text('PILOT SCRAMBLING...', 160, 8, 'k', 'center');
+    else if (this.state === 'fly' && this.Z > 0.5 && this.door < 0.1 && blink(this.t, 1.5)) text('F7 / X: OPEN HANGAR DOORS', 160, 8, 'k', 'center');
+    else if (this.state === 'fly' && this.Z <= 0.1 && this.t < 8) text('FIRE:LIFT  UP:ENGINE  L/R:ROTATE', 160, 8, 'k', 'center');
+    if (this.state === 'crash') text(this.why, 160, 8, 'r', 'center');
+  };
+  Hangar.prototype.hud = function () {
+    const k = this.k;
+    text('VELOCITY X', 0, row(0), 'G'); text(sgn(this.vx * 0.6, 2) + ' K/H', 88, row(0), 'w');
+    text('Y', 72, row(1), 'G'); text(sgn(this.vy * 0.6, 2) + ' K/H', 88, row(1), 'w');
+    text('VERT', 48, row(2), 'G'); text(sgn(this.vz * 0.6, 2) + ' K/H', 88, row(2), 'w');
+    text('COORDINATES X', 168, row(0), 'o'); text(sgn(this.X / 2, 3) + ' M', 320, row(0), 'w', 'right');
+    text('Y', 264, row(1), 'o'); text(sgn(this.Y / 2, 3) + ' M', 320, row(1), 'w', 'right');
+    text('ALTITUDE', 200, row(2), 'o'); text(pad(this.Z / 2, 2) + ' M', 320, row(2), 'w', 'right');
+    k.impactRow(3);
+    k.aircraftRow(4);
   };
 
   /* =====================================================================
-     LEVEL 2 — Flight to the target (horizontal scroller, oblique ground)
+     SEQUENCE III — attack run through enemy territory
      ===================================================================== */
-  const HORIZON = 64, ROW = 162, RADAR = 70;
-  function Flight(k) {
+  const PX = 70; // plane screen x
+  function Run(k, relief) {
     this.k = k; this.t = 0; this.booms = new Booms();
-    const T = k.tgt();
-    this.B = BIOME[T.biome];
-    this.L = 4600 + k.target * 500;
-    this.speed = 62 + k.target * 3;
-    this.wx = k.resumeX || 0;
-    this.px = 60; this.a = 40; this.fireT = 0; this.bombT = 0; this.alert = 0; this.jetT = 0;
-    this.bul = []; this.bombs = []; this.shots = []; this.air = [];
-    this.state = 'fly'; this.inv = this.wx > 0 ? 1.5 : 0;
+    this.flying = true;
+    this.final = k.final;
+    this.L = this.final ? 3300 : 2500 + (4 - Object.values(k.alive).filter(Boolean).length) * 150;
+    this.wx = 0; this.speed = 56;
+    this.gy = 80; this.A = 6; this.fireT = 0;
+    this.bul = []; this.seek = []; this.jets = []; this.shells = [];
+    this.seekT = 4; this.jetT = 8; this.radar = 0;
+    this.state = 'fly'; this.inv = relief ? 1.5 : 0;
     this.gen();
   }
-  Flight.prototype.gen = function () {
-    const r = ROM.RNG(4242 + this.k.target * 97);
-    const objs = (this.objs = []);
-    const decor = (this.decor = []);
-    const L = this.L, lv = this.k.target, sk = this.k.skill;
-    for (let x = 0; x < L + 600; x += r.range(14, 40)) decor.push({ x, d: r(), k: r() < 0.7 ? 'tree' : 'house', water: this.B.water && r() < 0.25 });
-    let x = 340;
-    const pool = ['trees', 'trees', 'village', 'tanks', 'tanks', 'sam', 'flak', 'radar', 'balloons', 'heli', 'jets', 'blocks'];
-    while (x < L - 300) {
-      const seg = r.pick(pool);
-      switch (seg) {
-        case 'trees': for (let i = 0, n = r.int(2, 5); i < n; i++) objs.push({ k: 'tree', x: x + i * 11, w: 8, h: 14, hp: 3 }); x += 60; break;
-        case 'village': for (let i = 0, n = r.int(2, 4); i < n; i++) objs.push({ k: 'house', x: x + i * 26, w: 16, h: 12, hp: 2, sc: 50 }); x += 100; break;
-        case 'blocks': for (let i = 0, n = r.int(1, 3); i < n; i++) objs.push({ k: 'block', x: x + i * 30, w: 14, h: r.int(26, 40), hp: 4, sc: 200 }); x += 90; break;
-        case 'tanks': for (let i = 0, n = r.int(1, 2 + (lv > 1 ? 1 : 0)); i < n; i++) objs.push({ k: 'tank', x: x + i * 34, w: 16, h: 8, hp: 2, sc: 300, ft: r.range(0.5, 2) }); x += 90; break;
-        case 'sam': objs.push({ k: 'sam', x, w: 12, h: 8, hp: 2, sc: 400, ft: 1 }); objs.push({ k: 'tree', x: x + 24, w: 8, h: 14, hp: 3 }); x += 70; break;
-        case 'flak': objs.push({ k: 'flak', x, w: 10, h: 8, hp: 2, sc: 350, ft: r.range(0.5, 2) }); x += 60; break;
-        case 'radar': objs.push({ k: 'radar', x, w: 12, h: 18, hp: 3, sc: 500 }); x += 60; break;
-        case 'balloons': for (let i = 0, n = r.int(1, 3); i < n; i++) objs.push({ k: 'balloon', x: x + i * 40, w: 8, h: 0, ba: r.int(60, 105), hp: 1, sc: 100 }); x += 120; break;
-        case 'heli': this.air.push({ at: x, k: 'heli', n: r.int(1, 2) }); x += 40; break;
-        case 'jets': this.air.push({ at: x, k: 'jet', n: r.int(1, 2 + (sk > 1 ? 1 : 0)) }); x += 40; break;
-        default: break;
-      }
-      x += r.range(30, 110) - lv * 4;
+  Run.prototype.gen = function () {
+    const r = ROM.RNG(77 + this.k.siteName().length * 131 + (this.final ? 999 : 0));
+    const o = (this.objs = []);
+    for (let x = 260; x < this.L; x += r.range(16, 34)) {
+      const y = r.range(12, 150);
+      const p = r();
+      if (p < 0.24) o.push({ k: 'pillar', x, y, h: 14, w: 8, d: 6, hp: 99 });
+      else if (p < 0.40) o.push({ k: 'tank', x, y, h: 3, w: 18, d: 8, hp: 2, sc: 150 });
+      else if (p < 0.62) o.push({ k: 'trees', x, y, h: 6, w: 16, d: 9, hp: 99, n: r.int(1, 3), s: r() * 9 });
+      else if (p < 0.76) o.push({ k: 'armor', x, y, h: 2.5, w: 16, d: 7, hp: 1, sc: 250, ft: r.range(1, 3), vy: r.range(-8, 8) });
+      else if (p < 0.82) o.push({ k: 'bldg', x, y: clamp(y, 24, 140), h: 12, w: 36, d: 16, hp: 4, sc: 500 });
+      else x += 10;
     }
-    // target city skyline
-    for (let cx = L - 200; cx < L + 400; cx += r.range(18, 34)) objs.push({ k: 'block', x: cx, w: 14, h: r.int(14, 34), hp: 4, sc: 200, city: true });
-    const start = this.wx;
-    this.objs = objs.filter((o) => o.x > start + 300 || o.k === 'tree');
-    this.air = this.air.filter((a) => a.at > start + 300);
+    if (this.final) for (let x = 600; x < this.L; x += r.range(200, 420)) o.push({ k: 'bldg', x, y: r.range(30, 130), h: 12, w: 36, d: 16, hp: 4, sc: 500 });
   };
-  Flight.prototype.sx = function (o) { return o.x - this.wx; };
-  Flight.prototype.kill = function () {
+  Run.prototype.sx = function (o) { return o.x - this.wx; };
+  Run.prototype.die = function (why) {
     if (this.k.game.god || this.inv > 0 || this.state !== 'fly') return;
-    this.state = 'dead'; this.deadT = 0;
-    this.booms.add(this.px + 8, ROW - this.a - 3, 2);
+    this.state = 'dead'; this.ct = 0; this.why = why;
+    this.booms.add(PX + 10, this.gy - this.A * 2.2 - 4, 2);
     A.sfx('bigboom'); A.engine(false);
   };
-  Flight.prototype.hitObj = function (o, n) {
-    if (o.hp <= 0) return;
-    o.hp -= n;
-    if (o.hp <= 0) {
-      if (o.sc) this.k.addScore(o.sc);
-      const sx = this.sx(o);
-      this.booms.add(sx + o.w / 2, o.k === 'balloon' ? ROW - o.ba : ROW - o.h / 2, o.k === 'block' ? 1.6 : 1);
-      A.sfx('boom');
-    } else A.sfx('clank');
-  };
-  Flight.prototype.update = function (dt, I) {
+  Run.prototype.update = function (dt, I) {
     this.t += dt;
     const k = this.k;
-    const scroll = this.state === 'dead' ? this.speed * 0.4 : this.speed;
-    this.wx += scroll * dt;
-    this.booms.update(dt, scroll);
-    if (this.state === 'dead') { this.deadT += dt; if (this.deadT > 1.8 && !this.rep) { this.rep = true; k.resumeX = this.wx > this.L / 2 ? this.L / 2 : 0; k.die(); } this.world(dt, scroll); return; }
-    if (this.state === 'end') { this.endT += dt; this.px += 80 * dt; if (this.endT > 1.2 && !this.rep) { this.rep = true; k.levelDone(1000); } return; }
-    this.inv = Math.max(0, this.inv - dt);
-    if (I.is('up')) this.a = Math.min(122, this.a + 62 * dt);
-    if (I.is('down')) this.a = Math.max(5, this.a - 62 * dt);
-    if (I.is('left')) this.px = Math.max(16, this.px - 70 * dt);
-    if (I.is('right')) this.px = Math.min(190, this.px + 70 * dt);
-    A.engine(true, 1 + this.a / 200);
-    this.fireT -= dt; this.bombT -= dt;
-    if (I.is('fire') && this.fireT <= 0) { this.fireT = 0.14; this.bul.push({ x: this.px + 16, a: this.a + 1 }); A.sfx('shot'); }
-    if (I.is('bomb') && this.bombT <= 0) { this.bombT = 0.6; this.bombs.push({ x: this.px + 6, a: this.a - 2, va: 0 }); A.sfx('bomb'); }
-    // radar
-    const radar = this.objs.some((o) => o.k === 'radar' && o.hp > 0 && this.sx(o) > -20 && this.sx(o) < 340);
-    if (this.a > RADAR) this.alert = Math.min(3, this.alert + dt * (radar ? 1.6 : 0.6));
-    else this.alert = Math.max(0, this.alert - dt);
-    this.jetT -= dt;
-    if (this.alert >= 2 && this.jetT <= 0) { this.jetT = 3.2 - k.skill * 0.6; this.spawn('jet', 2); A.sfx('alarm'); }
-    for (const a of this.air) if (!a.done && this.wx + W > a.at) { a.done = true; this.spawn(a.k, a.n); }
-    this.world(dt, scroll);
-    this.collide();
-    if (this.wx > this.L) { this.state = 'end'; this.endT = 0; }
-  };
-  Flight.prototype.spawn = function (kind, n) {
-    for (let i = 0; i < n; i++) {
-      if (kind === 'heli') this.airUnits().push({ k: 'heli', x: W + 10 + i * 30, a: rnd(40, 100), hp: 2, ft: rnd(1, 2), bob: Math.random() * 6 });
-      else this.airUnits().push({ k: 'jet', x: W + 10 + i * 24, a: Math.max(15, Math.min(115, this.a + rnd(-25, 25))), hp: 1, ft: rnd(0.2, 0.6), shots: 2 });
+    const live = this.state === 'fly';
+    this.wx += this.speed * (live ? 1 : 0.3) * dt;
+    this.booms.update(dt);
+    if (this.state === 'dead') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.planeLost(); } }
+    if (this.state === 'arrive') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.addScore(1000); k.runDone(); } return; }
+    if (live) {
+      this.inv = Math.max(0, this.inv - dt);
+      if (I.is('left')) this.gy -= 46 * dt;
+      if (I.is('right')) this.gy += 46 * dt;
+      this.gy = clamp(this.gy, 12, 152);
+      this.A = clamp(this.A + k.dive(I) * 9 * dt, k.lvl === 0 ? 1 : 0, 24);
+      A.engine(true, 1 + this.A / 30);
+      if (this.A <= 0 && k.lvl > 0) this.die('CRASHED INTO THE GROUND');
+      this.fireT -= dt;
+      if (I.is('fire') && this.fireT <= 0) { this.fireT = 0.16; this.bul.push({ x: PX + 22, gy: this.gy, A: this.A }); A.sfx('shot'); }
+      // flying above the radar floor brings more heat seekers from behind
+      this.radar = this.A > 11 ? this.radar + dt : Math.max(0, this.radar - dt);
+      this.seekT -= dt * (this.radar > 1.2 ? 2.5 : 1);
+      if (this.seekT <= 0) {
+        this.seekT = [7, 5.5, 4.5][k.lvl];
+        this.seek.push({ x: -20, gy: this.gy + rnd(-10, 10), A: 5, v: 70 });
+        A.sfx('missile');
+      }
+      this.jetT -= dt;
+      if (this.jetT <= 0) { this.jetT = rnd(7, 11) - k.lvl; this.jets.push({ x: 330, gy: rnd(20, 140), A: rnd(6, 14), ft: 0.6, n: 2 }); }
+      if (this.wx > this.L) { this.state = 'arrive'; this.ct = 0; A.sfx('clear'); }
     }
+    for (const b of this.bul) b.x += 190 * dt;
+    for (const s of this.seek) {
+      s.x += s.v * dt;
+      if (s.x < PX) s.gy += clamp(this.gy - s.gy, -1, 1) * 22 * dt;
+    }
+    for (const j of this.jets) {
+      j.x -= (70 + this.speed) * dt;
+      j.gy += clamp(this.gy - j.gy, -1, 1) * 14 * dt;
+      j.ft -= dt;
+      if (live && j.n > 0 && j.ft <= 0 && j.x > PX + 40) { j.n--; j.ft = 0.7; this.fireAt(j.x, j.gy, j.A, 125); }
+    }
+    for (const o of this.objs) {
+      if (o.k !== 'armor' || o.hp <= 0) continue;
+      const sx = this.sx(o);
+      if (sx < -20 || sx > 330) continue;
+      o.y = clamp(o.y + o.vy * dt, 14, 150);
+      o.ft -= dt * (0.8 + k.lvl * 0.35);
+      if (live && o.ft <= 0 && sx > PX + 30 && sx < PX + 230) { o.ft = rnd(1.8, 3); this.fireAt(sx, o.y, 2, 78); }
+    }
+    for (const s of this.shells) { s.x += s.vx * dt; s.gy += s.vy * dt; s.A += s.va * dt; s.life -= dt; }
+    this.collide();
+    this.bul = this.bul.filter((b) => !b.dead && b.x < 330);
+    this.seek = this.seek.filter((s) => !s.dead && s.x < 340);
+    this.jets = this.jets.filter((j) => !j.dead && j.x > -30);
+    this.shells = this.shells.filter((s) => !s.dead && s.life > 0);
   };
-  Flight.prototype.airUnits = function () { return this.units || (this.units = []); };
-  Flight.prototype.fireAt = function (x, a, sp) {
-    const tx = this.px + 8, ta = this.a;
-    const d = Math.hypot(tx - x, ta - a) || 1;
-    this.shots.push({ x, a, vx: (tx - x) / d * sp, va: (ta - a) / d * sp, life: 3 });
+  Run.prototype.fireAt = function (x, gy, a, sp) {
+    const tx = PX + 10, d = Math.hypot(tx - x, this.gy - gy) || 1, tt = d / sp;
+    this.shells.push({ x, gy, A: a, vx: (tx - x) / tt, vy: (this.gy - gy) / tt, va: (this.A - a) / tt, life: tt + 0.4 });
     A.sfx('enemyShot');
   };
-  Flight.prototype.world = function (dt, scroll) {
-    const sk = this.k.skill, rate = 0.8 + sk * 0.3 + this.k.target * 0.08;
-    const live = this.state === 'fly';
-    for (const o of this.objs) {
-      const sx = this.sx(o);
-      if (sx < -40 || sx > W + 20 || o.hp <= 0) continue;
-      const ahead = sx > this.px + 30 && sx < W - 10;
-      if (o.k === 'tank') {
-        o.x -= 8 * dt;
-        o.ft -= dt * rate;
-        if (live && ahead && o.ft <= 0) { o.ft = rnd(1.6, 2.8); this.fireAt(sx + 2, 8, 80); }
-      } else if (o.k === 'sam') {
-        o.ft -= dt * rate;
-        if (live && ahead && (this.a > RADAR || this.alert > 1) && o.ft <= 0) {
-          o.ft = rnd(2.8, 4);
-          this.shots.push({ k: 'missile', x: sx + 6, a: 10, vx: -10, va: 70, life: 4.5, hp: 1 });
-          A.sfx('missile');
-        }
-      } else if (o.k === 'flak') {
-        o.ft -= dt * rate;
-        if (live && sx > this.px + 20 && o.ft <= 0) {
-          o.ft = rnd(1.4, 2.4);
-          const tt = 1;
-          const tx = this.px + 8 + rnd(-14, 14), ta = this.a + rnd(-10, 10);
-          this.shots.push({ k: 'flak', x: sx + 5, a: 8, vx: (tx - sx) / tt, va: (ta - 8) / tt, life: tt });
-          A.sfx('enemyShot');
-        }
-      }
-    }
-    for (const u of this.airUnits()) {
-      if (u.hp <= 0) continue;
-      if (u.k === 'heli') {
-        u.x -= 22 * dt; u.bob += dt * 3; u.a += Math.sin(u.bob) * 10 * dt;
-        u.a += Math.sign(this.a - u.a) * 8 * dt;
-        u.ft -= dt * rate;
-        if (live && u.x > this.px + 20 && u.ft <= 0) { u.ft = rnd(1.2, 2); this.fireAt(u.x, u.a + 3, 90); }
-      } else {
-        u.x -= 150 * dt;
-        u.a += Math.sign(this.a - u.a) * 18 * dt;
-        u.ft -= dt * rate;
-        if (live && u.shots > 0 && u.x > this.px + 30 && u.ft <= 0) { u.shots--; u.ft = 0.4; this.fireAt(u.x, u.a + 3, 140); }
-      }
-    }
-    this.units = this.airUnits().filter((u) => u.x > -30 && u.hp > 0);
-    for (const b of this.bul) b.x += 230 * dt;
-    this.bul = this.bul.filter((b) => b.x < W && !b.dead);
-    for (const b of this.bombs) { b.va -= 110 * dt; b.a += b.va * dt; b.x += 4 * dt; }
-    for (const b of this.bombs) {
-      if (b.a > 0) continue;
-      b.dead = true;
-      this.booms.add(b.x, ROW - 2, 1); A.sfx('boom');
-      for (const o of this.objs) if (o.hp > 0 && Math.abs(this.sx(o) + o.w / 2 - b.x) < o.w / 2 + 8) this.hitObj(o, 3);
-    }
-    this.bombs = this.bombs.filter((b) => !b.dead);
-    stepShots(this, dt, live);
-  };
-  /* enemy fire shared by the flight and launch-site levels (screen x, altitude a) */
-  function stepShots(L, dt, live) {
-    for (const s of L.shots) {
-      s.life -= dt;
-      if (s.k === 'missile') {
-        const dx = L.px + 8 - s.x, da = L.a - s.a, d = Math.hypot(dx, da) || 1;
-        s.vx += (dx / d * 95 - s.vx) * dt * 1.8; s.va += (da / d * 95 - s.va) * dt * 1.8;
-      }
-      s.x += s.vx * dt; s.a += s.va * dt;
-      if (s.k === 'flak' && s.life <= 0) {
-        s.dead = true;
-        L.booms.add(s.x, ROW - s.a, 0.6); A.sfx('flak');
-        if (live && Math.hypot(s.x - L.px - 8, s.a - L.a) < 8) L.kill();
-      }
-    }
-    L.shots = L.shots.filter((s) => !s.dead && s.life > 0 && s.a > -2 && s.x > -10 && s.x < W + 10);
-  }
-  Flight.prototype.collide = function () {
-    const px = this.px, a = this.a;
+  Run.prototype.collide = function () {
+    const k = this.k;
     for (const b of this.bul) {
       for (const o of this.objs) {
         if (o.hp <= 0) continue;
         const sx = this.sx(o);
-        if (b.x < sx || b.x > sx + o.w + 3) continue;
-        if (o.k === 'balloon') { if (Math.abs(b.a - o.ba) < 6) { b.dead = true; this.hitObj(o, 1); } continue; }
-        if (b.a <= o.h + 2) { b.dead = true; if (o.k !== 'tree') this.hitObj(o, 1); break; }
+        if (b.x < sx - o.w / 2 || b.x > sx + o.w / 2 || Math.abs(b.gy - o.y) > o.d / 2 + 3 || b.A > o.h + 1) continue;
+        b.dead = true;
+        if (o.hp < 50) { o.hp--; if (o.hp <= 0) { k.addScore(o.sc); this.booms.add(sx, o.y - 4, o.k === 'bldg' ? 1.8 : 1, this.speed); A.sfx('boom'); } else A.sfx('clank'); }
+        break;
       }
-      for (const u of this.airUnits()) if (u.hp > 0 && b.x > u.x - 3 && b.x < u.x + 19 && Math.abs(b.a - u.a - 3) < 7) { b.dead = true; u.hp--; if (u.hp <= 0) { this.k.addScore(u.k === 'jet' ? 800 : 500); this.booms.add(u.x + 8, ROW - u.a - 3, 1.2); A.sfx('boom'); } }
-      for (const s of this.shots) if (s.k === 'missile' && Math.abs(b.x - s.x) < 5 && Math.abs(b.a - s.a) < 4) { s.dead = true; b.dead = true; this.k.addScore(150); A.sfx('small'); }
+      for (const s of this.seek) if (!s.dead && s.x > PX + 20 && Math.abs(b.x - s.x - 8) < 9 && Math.abs(b.gy - s.gy) < 5) { s.dead = b.dead = true; k.addScore(200); this.booms.add(s.x + 8, s.gy - s.A * 2.2, 0.8); A.sfx('small'); }
+      for (const j of this.jets) if (!j.dead && Math.abs(b.x - j.x) < 10 && Math.abs(b.gy - j.gy) < 6 && Math.abs(b.A - j.A) < 4) { j.dead = b.dead = true; k.addScore(300); this.booms.add(j.x, j.gy - j.A * 2.2, 1.2); A.sfx('boom'); }
     }
     if (this.state !== 'fly') return;
-    for (const o of this.objs) {
-      if (o.k !== 'balloon' && o.hp <= 0) continue;
-      const sx = this.sx(o);
-      if (px + 15 < sx || px + 1 > sx + o.w) continue;
-      if (o.k === 'balloon') { if (o.hp > 0 && a < o.ba + 8 && Math.abs(sx + 4 - (px + 8)) < 6) this.kill(); continue; }
-      if (a < o.h + 1) this.kill();
-    }
-    for (const u of this.airUnits()) if (u.hp > 0 && Math.abs(u.x - px) < 13 && Math.abs(u.a - a) < 6) { u.hp = 0; this.kill(); }
-    for (const s of this.shots) if (s.k !== 'flak' && s.x > px && s.x < px + 16 && Math.abs(s.a - a - 3) < 4) { s.dead = true; this.kill(); }
-  };
-  Flight.prototype.auto = function () {
-    const a = { fire: true };
-    let need = 18;
     for (const o of this.objs) {
       if (o.hp <= 0) continue;
       const sx = this.sx(o);
-      if (sx > this.px - 10 && sx < this.px + 90) need = Math.max(need, o.k === 'balloon' ? o.ba + 14 : o.h + 10);
+      if (sx + o.w / 2 < PX || sx - o.w / 2 > PX + 20 || Math.abs(this.gy - o.y) > o.d / 2 + 3) continue;
+      if (this.A < o.h) this.die(o.k === 'pillar' ? 'HIT A TOWER' : 'CRASHED');
     }
-    if (this.a < need) a.up = true; else if (this.a > need + 8) a.down = true;
-    a.bomb = this.objs.some((o) => o.hp > 0 && (o.k === 'tank' || o.k === 'sam') && Math.abs(this.sx(o) - this.px - 20) < 12);
-    for (const s of this.shots) if (s.x > this.px && s.x < this.px + 40 && Math.abs(s.a - this.a) < 10) { a.up = s.a < this.a; a.down = !a.up; }
+    for (const s of this.seek) if (!s.dead && Math.abs(s.x + 8 - (PX + 10)) < 10 && Math.abs(s.gy - this.gy) < 6 && this.A > 2.6 && Math.abs(s.A - this.A) < 2.6) { s.dead = true; this.die('HEAT SEEKING MISSILE'); }
+    for (const j of this.jets) if (!j.dead && Math.abs(j.x - PX - 10) < 12 && Math.abs(j.gy - this.gy) < 6 && Math.abs(j.A - this.A) < 4) { j.dead = true; this.die('MID-AIR COLLISION'); }
+    for (const s of this.shells) if (Math.abs(s.x - PX - 10) < 8 && Math.abs(s.gy - this.gy) < 5 && Math.abs(s.A - this.A) < 3) { s.dead = true; this.die('SHOT DOWN'); }
+  };
+  Run.prototype.auto = function () {
+    const a = { fire: true };
+    const seekerBehind = this.seek.some((q) => q.x < PX + 4 && q.x > PX - 140);
+    // score candidate lanes: obstacles (tall ones are impassable), incoming fire
+    const lane = (gy) => {
+      if (gy < 14 || gy > 150) return { cost: 1e9, need: 0 };
+      let cost = Math.abs(gy - this.gy) * 0.05, need = 1.2;
+      for (const o of this.objs) {
+        if (o.hp <= 0) continue;
+        const sx = this.sx(o);
+        if (sx + o.w / 2 < PX - 4 || sx - o.w / 2 > PX + 64) continue;
+        if (Math.abs(gy - o.y) > o.d / 2 + 7) continue;
+        if (o.h > 8 || (seekerBehind && o.h > 2)) cost += 1000; else need = Math.max(need, o.h + 1.6);
+      }
+      for (const q of this.shells.concat(this.jets)) if (q.x > PX - 6 && q.x < PX + 80 && Math.abs(q.gy - gy) < 10) cost += 500;
+      return { cost, need };
+    };
+    let best = null;
+    for (const off of [0, -8, 8, -16, 16, -26, 26, -38, 38]) {
+      const L = lane(this.gy + off);
+      if (!best || L.cost < best.cost) best = Object.assign({ off }, L);
+    }
+    if (best.off < -2) a.left = true; else if (best.off > 2) a.right = true;
+    const here = lane(this.gy);
+    const need = Math.max(here.need, best.need);
+    const diveIsUp = !this.k.invert;
+    if (this.A > need + 0.5) { if (diveIsUp) a.up = true; else a.down = true; }
+    else if (this.A < need) { if (diveIsUp) a.down = true; else a.up = true; }
     return a;
   };
-  Flight.prototype.drawGround = function () {
-    const B = this.B;
-    // sky bands (C64 style)
-    const bands = B.snow ? ['l', 'w'] : ['B', 'c'];
-    rect(0, 0, W, HORIZON, bands[0]);
-    rect(0, HORIZON - 14, W, 8, bands[1]); rect(0, HORIZON - 4, W, 4, bands[1]);
-    // far hills (parallax)
-    for (let i = -1; i < 12; i++) {
-      const x = i * 40 - ((this.wx * 0.2) % 40);
-      const h = 6 + ((i * 7 + Math.floor(this.wx * 0.2 / 40)) % 4) * 3;
-      for (let j = 0; j < h; j++) rect(x + j * 2, HORIZON - j, 40 - j * 4, 1, B.far);
-    }
-    rect(0, HORIZON, W, PH - HORIZON, B.ground);
-    // oblique stripes give the ground its depth
-    for (let i = -2; i < 22; i++) {
-      const x0 = i * 24 - (this.wx % 24);
-      for (let y = HORIZON; y < PH; y += 3) {
-        const sh = (y - HORIZON) * 0.35;
-        rect(x0 - sh, y, 3 + (y - HORIZON) * 0.04, 1, B.stripe);
-      }
-    }
-    // background decor (non-colliding) with depth parallax
-    for (const d of this.decor) {
-      const f = 0.45 + d.d * 0.45;
-      const sx = d.x - this.wx * f;
-      if (sx < -20 || sx > W + 10) continue;
-      const y = HORIZON + 6 + d.d * 70;
-      if (d.water) { rect(sx - 6, y + 4, 24, 3, 'b'); rect(sx - 2, y + 5, 10, 1, 'B'); continue; }
-      if (d.k === 'tree') this.drawTree(sx, y, 0.7);
-      else { rect(sx, y + 2, 10, 6, 'l'); rect(sx - 1, y, 12, 2, 'r'); }
-    }
-    // main row track
-    rect(0, ROW, W, 4, B.snow ? 'l' : 'n');
-    rect(0, ROW + 4, W, 1, 'k');
-  };
-  Flight.prototype.drawTree = function (x, base, s) {
-    const B = this.B;
-    s = s || 1;
-    const h = Math.round(12 * s);
-    rect(x + 3, base + h - 2, 2, 3, 'n');
-    for (let j = 0; j < h; j++) {
-      const w = Math.max(1, Math.round((j % 4 + j / 2) * s));
-      rect(x + 4 - w / 2, base + j, w, 1, B.snow && j % 4 === 0 ? 'w' : B.tree);
-    }
-  };
-  Flight.prototype.drawObj = function (o) {
-    const sx = this.sx(o), base = ROW;
-    const dead = o.hp <= 0;
+  Run.prototype.drawObj = function (o) {
+    const sx = this.sx(o), y = o.y;
+    if (o.hp <= 0) { ell(sx, y, o.w / 2, o.d / 3, 'k'); return; }
     switch (o.k) {
-      case 'tree': if (!dead) this.drawTree(sx, base - 14, 1.15); break;
-      case 'house':
-        if (dead) { rect(sx, base - 3, 16, 3, 'd'); break; }
-        rect(sx + 1, base - 9, 14, 9, this.B.snow ? 'o' : 'l');
-        for (let j = 0; j < 4; j++) rect(sx - 1 + j, base - 12 + j, 18 - j * 2, 1, this.B.snow ? 'w' : 'r');
-        rect(sx + 3, base - 6, 3, 3, 'b'); rect(sx + 10, base - 6, 3, 6, 'n');
+      case 'pillar':
+        poly([[sx + 2, y + 1], [sx + 9, y + 3], [sx + 6, y + 5], [sx - 1, y + 3]], 'k');
+        rect(sx - 3, y - 22, 7, 23, 'y'); rect(sx + 2, y - 22, 2, 23, 'Y');
+        ell(sx + 0.5, y - 22, 3.5, 1.4, 'O');
         break;
-      case 'block':
-        if (dead) { rect(sx, base - 6, o.w, 6, 'd'); break; }
-        rect(sx, base - o.h, o.w, o.h, 'm');
-        rect(sx, base - o.h, o.w, 1, 'l');
-        for (let y = base - o.h + 3; y < base - 3; y += 5) for (let x = sx + 2; x < sx + o.w - 2; x += 4) rect(x, y, 2, 2, (x + y) % 3 ? 'k' : 'y');
+      case 'tank':
+        ell(sx + 3, y + 1, 10, 4, 'k');
+        ell(sx, y, 9, 3.8, 'b'); rect(sx - 9, y - 3, 18, 3, 'b'); ell(sx, y - 3, 9, 3.6, 'B'); ell(sx, y - 3, 6.6, 2.4, 'k');
         break;
-      case 'tank': blit(tankSpr(dead), sx, base - 9, true, 1.25); break;
-      case 'sam':
-        rect(sx, base - 3, 12, 3, dead ? 'd' : 'n');
-        if (!dead) { rect(sx + 2, base - 8, 8, 2, 'w'); rect(sx + 3, base - 10, 8, 2, 'w'); rect(sx + 10, base - 10, 2, 2, 'R'); }
-        break;
-      case 'flak':
-        rect(sx, base - 4, 10, 4, dead ? 'd' : 'o');
-        if (!dead) { rect(sx + 4, base - 7, 3, 3, 'd'); for (let i = 0; i < 5; i++) rect(sx + 3 - i, base - 8 - i, 1, 1, 'k'); }
-        break;
-      case 'radar':
-        rect(sx + 5, base - 12, 2, 12, dead ? 'd' : 'm');
-        if (!dead) {
-          const w = Math.round(Math.abs(Math.cos(this.t * 3)) * 6) + 1;
-          rect(sx + 6 - w, base - 18, w * 2, 5, 'l');
-          if (blink(this.t, 3)) rect(sx + 5, base - 20, 2, 2, 'R');
+      case 'trees':
+        for (let i = 0; i < o.n; i++) {
+          const ox = (i - (o.n - 1) / 2) * 7 + Math.sin(o.s + i) * 2, oy = Math.cos(o.s + i * 2) * 3;
+          ell(sx + ox + 3, y + oy + 2, 5, 2, 'k');
+          rect(sx + ox - 0.5, y + oy - 3, 1.5, 4, 'n');
+          ell(sx + ox, y + oy - 7, 5, 4.4, 'g'); ell(sx + ox - 1.4, y + oy - 8, 2.2, 1.8, 'G');
         }
         break;
-      case 'balloon':
-        if (dead) break;
-        for (let y = base - o.ba + 6; y < base; y += 2) rect(sx + 4, y, 1, 1, 'd');
-        circle(sx + 4, base - o.ba, 4, 'l');
-        rect(sx + 2, base - o.ba + 4, 5, 2, 'm');
+      case 'armor':
+        ell(sx + 2, y + 2, 9, 2.6, 'k');
+        blit(tankSpr(), sx, y - 3);
         break;
+      case 'bldg': {
+        poly([[sx + 18, y - 4], [sx + 28, y + 2], [sx + 28, y + 10], [sx - 10, y + 10], [sx - 18, y + 4]], 'k');
+        rect(sx - 18, y - 18, 30, 22, 'o'); poly([[sx + 12, y - 18], [sx + 18, y - 22], [sx + 18, y], [sx + 12, y + 4]], 'n');
+        poly([[sx - 18, y - 18], [sx - 12, y - 22], [sx + 18, y - 22], [sx + 12, y - 18]], 'O');
+        for (let i = 0; i < 4; i++) rect(sx - 15 + i * 7, y - 12, 2.5, 5, 'k');
+        for (const tx of [-14, -2, 9]) { rect(sx + tx, y - 27, 4, 8, 'o'); poly([[sx + tx, y - 27], [sx + tx + 2, y - 33], [sx + tx + 4, y - 27]], 'w'); }
+        for (let i = 0; i < 3; i++) rect(sx - 15 + i * 9, y - 2, 4, 6, 'y');
+        break;
+      }
       default: break;
     }
   };
-  Flight.prototype.draw = function () {
-    this.drawGround();
-    for (const o of this.objs) { const sx = this.sx(o); if (sx > -40 && sx < W + 10) this.drawObj(o); }
-    // shadows
-    for (const u of this.airUnits()) rect(u.x + 2, ROW + 1, 12, 2, 'k');
-    if (this.state !== 'dead') {
-      const sw = Math.max(4, 14 - this.a / 12);
-      rect(this.px + 8 - sw / 2, ROW + 1, sw, 2, 'k');
-    }
-    for (const u of this.airUnits()) {
-      const y = ROW - u.a - 6;
-      if (u.k === 'heli') blit(heliSpr(blink(this.t, 12) ? 1 : 0), u.x, y - 2, true, 1.4);
-      else blit(migSpr(), u.x, y, true, 1.4);
-    }
-    if (this.state !== 'dead' && !(this.inv > 0 && blink(this.t, 10))) {
-      blit(planeSpr('l', 'm', 'B'), this.px, ROW - this.a - 6, false, 1.4);
-      rect(this.px - 2 - Math.random() * 2, ROW - this.a - 3, 2, 1, 'y');
-    }
-    for (const b of this.bul) rect(b.x, ROW - b.a - 3, 3, 1, 'w');
-    for (const b of this.bombs) rect(b.x, ROW - b.a - 2, 2, 3, 'k');
-    for (const s of this.shots) {
-      const y = ROW - s.a - 3;
-      if (s.k === 'missile') { rect(s.x - 2, y, 4, 2, 'w'); rect(s.x + 2, y, 2, 2, blink(this.t, 10) ? 'y' : 'o'); }
-      else if (s.k === 'flak') { rect(s.x - 1, y - 1, 2, 2, 'd'); rect(s.x, y - 1, 1, 1, 'y'); }
-      else rect(s.x - 1, y - 1, 2, 2, 'R');
-    }
+  Run.prototype.draw = function () {
+    rect(0, 0, W, PF, 'd');
+    for (let i = 0; i < 40; i++) { const x = ((i * 53 - this.wx) % 340 + 340) % 340 - 10, y = (i * 37) % 156; rect(x, y, 2, 1, 'D'); }
+    const items = [];
+    for (const o of this.objs) { const sx = this.sx(o); if (sx > -40 && sx < 360) items.push([o.y, () => this.drawObj(o)]); }
+    if (this.state !== 'dead') items.push([this.gy, () => {
+      const sw = Math.max(5, 11 - this.A * 0.25);
+      ell(PX + 12, this.gy + 1, sw, 2, 'k');
+      if (!(this.inv > 0 && blink(this.t, 10))) blit(sidePlane('y'), PX + 11, this.gy - this.A * 2.2 - 4);
+    }]);
+    for (const s of this.seek) items.push([s.gy, () => { ell(s.x + 8, s.gy + 1, 6, 1.4, 'k'); blit(seeker(), s.x + 8, s.gy - s.A * 2.2 - 2); }]);
+    for (const j of this.jets) items.push([j.gy, () => { ell(j.x, j.gy + 1, 7, 1.6, 'k'); blit(enemySide(), j.x, j.gy - j.A * 2.2 - 3, { flip: true }); }]);
+    items.sort((a, b) => a[0] - b[0]);
+    for (const [, f] of items) f();
+    for (const b of this.bul) rect(b.x, b.gy - b.A * 2.2 - 3, 4, 1, 'w');
+    for (const s of this.shells) rect(s.x - 1, s.gy - s.A * 2.2 - 1, 2, 2, 'w');
     this.booms.draw();
-    // altimeter with radar floor
-    rect(W - 8, 30, 5, 124, 'k');
-    rect(W - 8, ROW - RADAR - 6, 5, 1, 'R');
-    rect(W - 8, Math.max(30, ROW - this.a - 6), 5, 2, 'G');
-    // progress
-    rect(4, 4, 102, 6, 'k');
-    rect(5, 5, 100 * Math.min(1, this.wx / this.L), 4, 'y');
-    if (this.state === 'fly' && this.a > RADAR) text(this.alert > 1.5 ? 'RADAR LOCK!' : 'RADAR', W / 2, 16, blink(this.t, 4) ? 'R' : 'w', 'center');
+    if (this.state === 'arrive') text('APPROACHING ' + (this.final ? 'MOSCOW' : 'LAUNCH SITE'), 160, 70, 'w', 'center');
+    if (this.state === 'dead') text(this.why, 160, 70, 'R', 'center');
+    if (this.state === 'fly' && this.radar > 0.5 && blink(this.t, 4)) text('RADAR CONTACT - FLY LOWER', 160, 4, 'R', 'center');
+    else if (this.state === 'fly' && this.seek.some((q) => q.x < PX) && blink(this.t, 3)) text('MISSILE BEHIND YOU - GET LOW!', 160, 4, 'y', 'center');
+  };
+  Run.prototype.hud = function () {
+    const k = this.k;
+    text(k.siteName(), 0, row(0), 'o');
+    text(pad(Math.max(0, (this.L - this.wx) / 10), 3) + ' KM', 320, row(0), 'D', 'right');
+    text('ALTITUDE', 104, row(1), 'L'); text(pad(this.A, 2) + ' M', 184, row(1), this.A > 11 ? 'R' : 'w');
+    k.impactRow(3);
+    k.aircraftRow(4);
   };
 
   /* =====================================================================
-     LEVEL 3 — Launch site (looping strafing passes over the base)
+     SEQUENCE IV — the missile silos (one control silo, four launch silos)
      ===================================================================== */
-  const BW = 640;
+  const SILO_X = [28, 92, 160, 228, 292];
+  const PY0 = 134; // plane screen y at zero altitude
   function Silo(k) {
     this.k = k; this.t = 0; this.booms = new Booms();
-    this.B = BIOME[k.tgt().biome];
-    this.wx = 0; this.px = 50; this.a = 50; this.fireT = 0; this.bombT = 0;
-    this.bul = []; this.bombs = []; this.shots = [];
-    this.state = 'fly'; this.inv = 1.5; this.pass = 1;
-    const p = k.silo || {};
-    this.ctrl = { x: 300, w: 56, h: 30, hp: p.ctrl !== undefined ? p.ctrl : 3 + k.skill, vent: 0, vt: 0 };
-    this.silos = [110, 450, 560].map((x, i) => ({ x, st: p.silos && p.silos[i] === 'dead' ? 'dead' : 'closed', t: 3 + i * 4, mh: 0, hp: 3, open: 0 }));
-    this.guns = [[40, 'flak'], [200, 'flak'], [400, 'flak'], [520, 'sam'], [610, 'flak']].map(([x, k2]) => ({ x, k: k2, hp: 2, ft: rnd(0.5, 2) }));
+    this.flying = true;
+    this.silos = SILO_X.map((x, i) => ({ x, center: i === 2, alive: true, wa: i === 2 ? 9 : 13 + (i % 2) * 3, ft: 2 + i * 0.7 }));
+    this.x = 160; this.A = 4; this.rockets = []; this.erockets = []; this.jets = []; this.shots = [];
+    this.fireT = 0; this.jetT = 6; this.state = 'fly'; this.inv = 1;
   }
-  Silo.prototype.persist = function () { return { ctrl: this.ctrl.hp, silos: this.silos.map((s) => (s.st === 'dead' ? 'dead' : 'ok')) }; };
-  Silo.prototype.sxs = function (x) { // world -> screen positions (two copies for wrap)
-    const off = this.wx % BW;
-    return [x - off, x - off + BW];
+  Silo.prototype.py = function () { return PY0 - this.A * 3; };
+  Silo.prototype.aligned = function () {
+    const tx = 4 - this.k.lvl, ta = 2 - this.k.lvl * 0.4;
+    return this.silos.find((s) => s.alive && Math.abs(this.x - s.x) <= tx && Math.abs(this.A - s.wa) <= ta);
   };
-  Silo.prototype.kill = Flight.prototype.kill;
+  Silo.prototype.die = function (why) {
+    if (this.k.game.god || this.inv > 0 || this.state !== 'fly') return;
+    this.state = 'dead'; this.ct = 0; this.why = why;
+    this.booms.add(this.x, this.py(), 2); A.sfx('bigboom'); A.engine(false);
+  };
   Silo.prototype.update = function (dt, I) {
     this.t += dt;
     const k = this.k;
-    const scroll = this.speed = 55;
-    this.wx += scroll * (this.state === 'dead' ? 0.4 : 1) * dt;
-    this.booms.update(dt, scroll);
-    if (Math.floor(this.wx / BW) + 1 !== this.pass) { this.pass = Math.floor(this.wx / BW) + 1; this.passMsg = 2; }
-    this.passMsg = Math.max(0, (this.passMsg || 0) - dt);
-    if (this.state === 'dead') { this.deadT += dt; if (this.deadT > 1.8 && !this.rep) { this.rep = true; k.die(); } this.world(dt); return; }
-    if (this.state === 'won') {
-      this.endT += dt;
-      if (Math.random() < dt * 8) { const [sx] = this.sxs(this.ctrl.x); this.booms.add(sx + rnd(0, 56), ROW - rnd(0, 30), rnd(1, 2)); A.sfx('boom'); }
-      if (this.endT > 2.5 && !this.rep) { this.rep = true; k.levelDone(5000); }
+    this.booms.update(dt);
+    const live = this.state === 'fly';
+    if (this.state === 'dead') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.planeLost(); } return; }
+    if (this.state === 'done') {
+      this.ct += dt;
+      if (Math.random() < dt * 6) { this.booms.add(160 + rnd(-30, 30), 22 + rnd(-8, 8), rnd(1, 2)); A.sfx('boom'); }
+      if (this.ct > 2.6 && !this.rep) { this.rep = true; k.siteDestroyed(); }
       return;
     }
     this.inv = Math.max(0, this.inv - dt);
-    if (I.is('up')) this.a = Math.min(110, this.a + 60 * dt);
-    if (I.is('down')) this.a = Math.max(8, this.a - 60 * dt);
-    if (I.is('left')) this.px = Math.max(16, this.px - 70 * dt);
-    if (I.is('right')) this.px = Math.min(200, this.px + 70 * dt);
-    A.engine(true, 1 + this.a / 200);
-    this.fireT -= dt; this.bombT -= dt;
-    if (I.is('fire') && this.fireT <= 0) { this.fireT = 0.14; this.bul.push({ x: this.px + 16, a: this.a + 1 }); A.sfx('shot'); }
-    if (I.is('bomb') && this.bombT <= 0) { this.bombT = 0.5; this.bombs.push({ x: this.px + 6, a: this.a - 2, va: 0 }); A.sfx('bomb'); }
-    this.world(dt);
-    this.collide();
-  };
-  Silo.prototype.world = function (dt) {
-    const k = this.k, rate = 0.8 + k.skill * 0.3, live = this.state === 'fly';
-    const C = this.ctrl;
-    C.vt += dt;
-    const per = 5 - k.skill * 0.5;
-    C.vent = (C.vt % per) < per * 0.4 ? Math.min(1, C.vent + dt * 4) : Math.max(0, C.vent - dt * 4);
+    if (I.is('left')) this.x -= 60 * dt;
+    if (I.is('right')) this.x += 60 * dt;
+    this.x = clamp(this.x, 10, 310);
+    this.A = clamp(this.A + k.dive(I) * 10 * dt, 1, 30);
+    A.engine(true, 1.2);
+    this.fireT -= dt;
+    if (I.is('fire') && this.fireT <= 0 && this.rockets.length < 2) {
+      this.fireT = 0.45;
+      this.rockets.push({ x: this.x, y: this.py() - 4, tgt: this.aligned() });
+      A.sfx('missile');
+    }
+    // silo defences fire at the elevation the aircraft has when they fire
     for (const s of this.silos) {
-      if (s.st === 'dead') continue;
-      s.t -= dt;
-      if (s.st === 'closed') { s.open = Math.max(0, s.open - dt * 2); if (s.t <= 0 && live) { s.st = 'opening'; A.sfx('door'); } }
-      if (s.st === 'opening') { s.open = Math.min(1, s.open + dt); if (s.open >= 1) { s.st = 'rising'; s.mh = 0; s.hp = 3; } }
-      if (s.st === 'rising') { s.mh += dt * (40 / (8 - k.skill - k.target * 0.4)); if (s.mh >= 40) { s.st = 'launch'; s.v = 10; A.sfx('launch'); } }
-      if (s.st === 'launch') {
-        s.v += 90 * dt; s.mh += s.v * dt;
-        if (s.mh > 220) { s.st = 'closed'; s.t = 14 + Math.random() * 5; s.mh = 0; if (live) k.cityLost(k.tgt().name); }
-      }
-    }
-    for (const g of this.guns) {
-      if (g.hp <= 0) continue;
-      g.ft -= dt * rate;
-      const [sx] = this.sxs(g.x).filter((v) => v > -20 && v < W + 20);
-      if (sx === undefined || !live || g.ft > 0) continue;
-      if (g.k === 'flak') {
-        g.ft = rnd(2.2, 3.4);
-        if (sx < this.px + 10) continue;
-        const tt = 1, tx = this.px + 8 + rnd(-14, 14), ta = this.a + rnd(-10, 10);
-        this.shots.push({ k: 'flak', x: sx + 5, a: 8, vx: (tx - sx) / tt, va: (ta - 8) / tt, life: tt });
+      if (!s.alive) continue;
+      s.ft -= dt * (0.8 + k.lvl * 0.3);
+      if (live && s.ft <= 0) {
+        s.ft = rnd(2.4, 4);
+        this.erockets.push({ x0: s.x, tx: this.x, A: this.A, t: 0, dur: 1.6 - k.lvl * 0.2 });
         A.sfx('enemyShot');
-      } else if (sx > this.px + 20) {
-        g.ft = rnd(3, 4.5);
-        this.shots.push({ k: 'missile', x: sx + 6, a: 10, vx: -10, va: 70, life: 4.5 });
-        A.sfx('missile');
       }
     }
-    for (const b of this.bul) b.x += 230 * dt;
-    this.bul = this.bul.filter((b) => b.x < W && !b.dead);
-    for (const b of this.bombs) {
-      b.va -= 110 * dt; b.a += b.va * dt; b.x += 4 * dt;
-      if (b.a > 0) continue;
-      b.dead = true;
-      this.booms.add(b.x, ROW - 2, 1); A.sfx('boom');
-      const [cx] = this.sxs(C.x).filter((v) => v > -80 && v < W + 20).concat([9999]);
-      if (b.x > cx && b.x < cx + C.w) {
-        if (C.vent > 0.5 && Math.abs(b.x - (cx + C.w / 2)) < 9 && C.hp > 0) {
-          C.hp--; this.k.addScore(1000); A.sfx('hit');
-          this.booms.add(cx + C.w / 2, ROW - C.h, 1.6);
-          if (C.hp <= 0) { this.state = 'won'; this.endT = 0; this.rep = false; A.sfx('bigboom'); A.engine(false); }
-        } else A.sfx('clank');
-      }
-      for (const g of this.guns) for (const gx of this.sxs(g.x)) if (g.hp > 0 && Math.abs(gx + 5 - b.x) < 12) { g.hp = 0; this.k.addScore(350); this.booms.add(gx + 5, ROW - 4, 1); }
+    // enemy aircraft enter from the left
+    this.jetT -= dt;
+    if (this.jetT <= 0) { this.jetT = rnd(6, 9) - k.lvl; this.jets.push({ x: -12, y: rnd(40, 90), vx: rnd(60, 85), ft: 1, n: 2 }); }
+    for (const j of this.jets) {
+      j.x += j.vx * dt; j.y += Math.sin(this.t * 2 + j.vx) * 10 * dt;
+      j.ft -= dt;
+      if (live && j.n > 0 && j.ft <= 0) { j.n--; j.ft = 0.9; const dx = this.x - j.x, dy = this.py() - j.y, d = Math.hypot(dx, dy) || 1; this.shots.push({ x: j.x, y: j.y, vx: (dx / d) * 110, vy: (dy / d) * 110 }); A.sfx('enemyShot'); }
     }
-    this.bombs = this.bombs.filter((b) => !b.dead);
-    stepShots(this, dt, live);
+    for (const s of this.shots) { s.x += s.vx * dt; s.y += s.vy * dt; }
+    for (const r of this.rockets) {
+      r.y -= 200 * dt;
+      for (const j of this.jets) if (!j.dead && Math.abs(r.x - j.x) < 7 && Math.abs(r.y - j.y) < 5) { j.dead = r.dead = true; k.addScore(300); this.booms.add(j.x, j.y, 1); A.sfx('boom'); }
+      if (!r.dead && r.y <= 24) {
+        r.dead = true;
+        if (r.tgt && r.tgt.alive) this.hitSilo(r.tgt);
+        else { this.booms.add(r.x, 30, 0.4); A.sfx('clank'); }
+      }
+    }
+    for (const e of this.erockets) {
+      e.t += dt;
+      if (e.t >= e.dur) {
+        e.dead = true;
+        if (live && Math.abs(this.x - e.tx) < 7 && Math.abs(this.A - e.A) < 2.5) this.die('HIT BY SILO DEFENSES');
+      }
+    }
+    for (const s of this.shots) if (live && Math.abs(s.x - this.x) < 6 && Math.abs(s.y - this.py()) < 4) { s.dead = true; this.die('SHOT DOWN'); }
+    for (const j of this.jets) if (live && !j.dead && Math.abs(j.x - this.x) < 10 && Math.abs(j.y - this.py()) < 5) { j.dead = true; this.die('MID-AIR COLLISION'); }
+    this.rockets = this.rockets.filter((r) => !r.dead);
+    this.erockets = this.erockets.filter((e) => !e.dead);
+    this.jets = this.jets.filter((j) => !j.dead && j.x < 340);
+    this.shots = this.shots.filter((s) => !s.dead && s.y < 160 && s.x > -10 && s.x < 330);
   };
-  Silo.prototype.collide = function () {
-    const C = this.ctrl;
-    for (const b of this.bul) {
-      for (const s of this.silos) {
-        if (s.st !== 'rising' && s.st !== 'launch') continue;
-        for (const sx of this.sxs(s.x)) {
-          if (b.x > sx + 3 && b.x < sx + 11 && b.a < s.mh + 2 && b.a > s.mh - 40) {
-            b.dead = true; s.hp--; A.sfx('clank');
-            if (s.hp <= 0) { s.st = 'dead'; this.k.addScore(2000); this.booms.add(sx + 7, ROW - s.mh + 20, 2); A.sfx('bigboom'); }
-          }
-        }
-      }
-      for (const cx of this.sxs(C.x)) if (b.x > cx && b.x < cx + C.w && b.a < C.h + 1) { b.dead = true; A.sfx('clank'); }
-      for (const g of this.guns) for (const gx of this.sxs(g.x)) if (g.hp > 0 && b.x > gx && b.x < gx + 12 && b.a < 10) { b.dead = true; g.hp--; if (g.hp <= 0) { this.k.addScore(350); this.booms.add(gx + 5, ROW - 4, 1); A.sfx('boom'); } }
-      for (const s of this.shots) if (s.k === 'missile' && Math.abs(b.x - s.x) < 5 && Math.abs(b.a - s.a) < 4) { s.dead = true; b.dead = true; this.k.addScore(150); }
-    }
-    if (this.state !== 'fly') return;
-    for (const cx of this.sxs(C.x)) if (this.px + 15 > cx && this.px < cx + C.w && this.a < C.h + 2) this.kill();
-    for (const s of this.silos) if (s.st === 'launch') for (const sx of this.sxs(s.x)) if (this.px + 15 > sx + 3 && this.px < sx + 11 && this.a < s.mh && this.a > s.mh - 40) this.kill();
-    for (const s of this.shots) if (s.k !== 'flak' && s.x > this.px && s.x < this.px + 16 && Math.abs(s.a - this.a - 3) < 4) { s.dead = true; this.kill(); }
+  Silo.prototype.hitSilo = function (s) {
+    const k = this.k;
+    s.alive = false;
+    this.booms.add(s.x, 18, s.center ? 2.4 : 1.8);
+    A.sfx('bigboom');
+    if (s.center) {
+      k.addScore(5000);
+      if (this.silos.every((q) => !q.alive)) k.addScore(10000);
+      this.state = 'done'; this.ct = 0; A.engine(false);
+    } else { k.addScore(2000); k.extraPlane(); }
   };
   Silo.prototype.auto = function () {
-    const a = { fire: true };
-    const C = this.ctrl;
-    const [cx] = this.sxs(C.x).filter((v) => v > this.px - 20).concat([9999]);
-    // bomb lead: time to fall ~ sqrt(2a/110), screen drift 55px/s backwards relative
-    const tf = Math.sqrt(2 * this.a / 110);
-    const land = this.px + 6 + 4 * tf + 55 * tf;
-    const want = cx + C.w / 2 - 55 * tf * 0; void want;
-    const rising = this.silos.find((s) => s.st === 'rising');
-    let alt = C.h + 18;
-    if (rising) alt = Math.max(alt, 20);
-    if (this.a < alt) a.up = true; else if (this.a > alt + 6) a.down = true;
-    // released when the vent will be under the bomb at impact
-    const ventAtImpact = cx + C.w / 2 - 55 * tf;
-    a.bomb = Math.abs(land - 55 * tf - ventAtImpact) < 6 && C.vent > 0.3;
-    void land;
-    for (const s of this.shots) if (s.x > this.px && s.x < this.px + 40 && Math.abs(s.a - this.a) < 10) { a.up = s.a < this.a; a.down = !a.up; }
+    const a = {};
+    const side = this.silos.filter((s) => s.alive && !s.center);
+    const tgt = (side.length && this.k.launch && this.k.launch.t > 60 ? side.sort((p, q) => Math.abs(p.x - this.x) - Math.abs(q.x - this.x))[0] : null) || this.silos[2];
+    if (this.x < tgt.x - 1) a.right = true; else if (this.x > tgt.x + 1) a.left = true;
+    const diveIsUp = !this.k.invert;
+    let wantA = tgt.wa;
+    for (const e of this.erockets) if (e.dur - e.t < 0.6 && Math.abs(this.x - e.tx) < 9 && Math.abs(this.A - e.A) < 3) wantA = e.A > 15 ? e.A - 4 : e.A + 4;
+    if (this.A > wantA + 0.4) { if (diveIsUp) a.up = true; else a.down = true; }
+    else if (this.A < wantA - 0.4) { if (diveIsUp) a.down = true; else a.up = true; }
+    a.fire = !!this.aligned();
     return a;
   };
   Silo.prototype.draw = function () {
-    const B = this.B, C = this.ctrl;
-    Flight.prototype.drawGround.call(Object.assign(this.__g || (this.__g = { decor: [] }), { B, wx: this.wx }));
-    // fence
-    for (let x = -((this.wx) % 16); x < W; x += 16) { rect(x, ROW - 6, 1, 6, 'd'); }
-    rect(0, ROW - 5, W, 1, 'd');
-    // control building
-    for (const cx of this.sxs(C.x)) {
-      if (cx < -80 || cx > W + 10) continue;
-      if (C.hp <= 0 && this.state !== 'won') { rect(cx, ROW - 8, C.w, 8, 'd'); continue; }
-      rect(cx - 4, ROW - 4, C.w + 8, 4, 'n');
-      rect(cx, ROW - C.h, C.w, C.h, 'm');
-      rect(cx, ROW - C.h, C.w, 2, 'l');
-      rect(cx + 4, ROW - C.h + 8, C.w - 8, 3, 'r');
-      for (let x = cx + 6; x < cx + C.w - 6; x += 8) rect(x, ROW - 12, 4, 6, 'k');
-      // roof vent
-      const vx = cx + C.w / 2 - 7;
-      rect(vx, ROW - C.h - 2, 14, 2, C.vent > 0.5 ? (blink(this.t, 8) ? 'y' : 'o') : 'k');
-      rect(vx - C.vent * 6, ROW - C.h - 4, 7, 2, 'l'); rect(vx + 7 + C.vent * 6, ROW - C.h - 4, 7, 2, 'l');
-      rect(cx + 4, ROW - C.h - 14, 1, 14, 'd'); if (blink(this.t, 2)) rect(cx + 3, ROW - C.h - 16, 3, 2, 'R');
-      for (let i = 0; i < 3 + this.k.skill; i++) rect(cx + 20 + i * 5, ROW - C.h + 14, 3, 3, i < C.hp ? 'G' : 'd');
+    rect(0, 0, W, PF, 'd');
+    for (const s of this.silos) {
+      const big = s.center;
+      const w = big ? 13 : 10;
+      if (big) { ell(s.x + 4, 26, 26, 6, 'k'); ell(s.x, 24, 25, 6, 'c'); ell(s.x, 22, 22, 5, 'C'); }
+      else ell(s.x + 5, 25, 12, 3.6, 'k');
+      if (!s.alive) { ell(s.x, 20, w, 4, 'k'); rect(s.x - w * 0.8, 14, w * 1.6, 6, 'n'); if (blink(this.t + s.x, 3)) ell(s.x, 10, 3, 2, 'D'); continue; }
+      rect(s.x - w, 6, w * 2, 16, 'N');
+      rect(s.x + w * 0.4, 6, w * 0.6, 16, 'n');
+      ell(s.x, 22, w, 3, 'N');
+      ell(s.x, 6, w, 3.2, 'w'); ell(s.x, 6, w * 0.45, 1.4, 'k');
+      if (big) for (let i = -2; i <= 2; i++) rect(s.x + i * 5 - 1, 21, 2, 2, 'k');
+      rect(s.x - 2, 12, 4, 4, 'k'); // the window
     }
-    // silos and ICBMs
-    for (const s of this.silos) for (const sx of this.sxs(s.x)) {
-      if (sx < -20 || sx > W + 10) continue;
-      rect(sx - 2, ROW - 3, 18, 3, 'l');
-      if (s.st === 'dead') { rect(sx + 1, ROW - 3, 12, 2, 'k'); if (blink(this.t + s.x, 3)) rect(sx + 5, ROW - 8, 3, 3, 'd'); continue; }
-      rect(sx + 1 - s.open * 6, ROW - 4, 6, 2, 'y'); rect(sx + 7 + s.open * 6, ROW - 4, 6, 2, 'y');
-      if (s.st === 'rising' || s.st === 'launch') {
-        const top = ROW - 3 - s.mh;
-        const vis = Math.min(40, s.mh);
-        rect(sx + 4, top + 6, 6, vis - 6, 'w');
-        rect(sx + 5, top + 2, 4, 4, 'w'); rect(sx + 6, top, 2, 2, 'w');
-        if (vis > 20) rect(sx + 4, top + 16, 6, 2, 'r');
-        if (s.st === 'launch') { rect(sx + 4, top + 40, 6, 4, blink(this.t, 12) ? 'y' : 'o'); rect(sx + 5, top + 44, 4, 4, 'r'); }
-        if (s.st === 'rising' && blink(this.t, 4)) text('!', sx + 4, top - 12, 'R');
-      }
+    for (const e of this.erockets) {
+      const f = e.t / e.dur;
+      rect(e.x0 + (e.tx - e.x0) * f - 0.5, 26 + (PY0 - e.A * 3 - 26) * f - 2, 1.5, 4, 'w');
     }
-    for (const g of this.guns) for (const gx of this.sxs(g.x)) {
-      if (gx < -20 || gx > W + 10) continue;
-      Flight.prototype.drawObj.call(Object.assign(this.__d || (this.__d = {}), { sx: () => gx, B, t: this.t }), { k: g.k, x: 0, w: 12, h: 8, hp: g.hp });
-    }
+    for (const j of this.jets) { ell(j.x + 4, j.y + 18, 5, 1.2, 'k'); blit(enemyRear(), j.x, j.y, { sc: 1.1 }); }
+    for (const s of this.shots) rect(s.x - 0.5, s.y - 0.5, 1.5, 1.5, 'w');
+    for (const r of this.rockets) { rect(r.x - 0.5, r.y - 3, 1.5, 4, 'w'); rect(r.x - 0.5, r.y + 1, 1.5, 1.5, 'o'); }
     if (this.state !== 'dead') {
-      rect(this.px + 8 - 6, ROW + 1, 12, 2, 'k');
-      if (!(this.inv > 0 && blink(this.t, 10))) blit(planeSpr('l', 'm', 'B'), this.px, ROW - this.a - 6, false, 1.4);
-    }
-    for (const b of this.bul) rect(b.x, ROW - b.a - 3, 3, 1, 'w');
-    for (const b of this.bombs) rect(b.x, ROW - b.a - 2, 2, 3, 'k');
-    for (const s of this.shots) {
-      const y = ROW - s.a - 3;
-      if (s.k === 'missile') { rect(s.x - 2, y, 4, 2, 'w'); rect(s.x + 2, y, 2, 2, 'o'); }
-      else if (s.k === 'flak') { rect(s.x - 1, y - 1, 2, 2, 'd'); rect(s.x, y - 1, 1, 1, 'y'); }
-      else rect(s.x - 1, y - 1, 2, 2, 'R');
+      ell(this.x + 1, PY0 + 8, Math.max(4, 9 - this.A * 0.12), 1.8, 'k');
+      if (!(this.inv > 0 && blink(this.t, 10))) blit(rearPlane(this.aligned() ? 'B' : 'y'), this.x, this.py(), { sc: 1.15 });
     }
     this.booms.draw();
-    text('PASS ' + this.pass, 4, 4, 'w');
-    if (this.passMsg > 0 && this.pass > 1) text('MAKE ANOTHER PASS', W / 2, 20, 'y', 'center');
-    if (C.vent > 0.5 && this.state === 'fly') text('VENT OPEN', W - 4, 4, blink(this.t, 6) ? 'y' : 'o', 'right');
+    if (this.state === 'dead') text(this.why, 160, 80, 'R', 'center');
+    if (this.state === 'done') text('CONTROL SILO DESTROYED', 160, 80, 'w', 'center');
   };
-
-  /* =====================================================================
-     LEVEL 4 — The Kremlin (frontal, bazooka)
-     ===================================================================== */
-  const DOORS = [44, 118, 190, 262];
-  const WALL_TOP = 78, WALL_BOT = 140;
-  function Kremlin(k) {
-    this.k = k; this.t = 0; this.booms = new Booms();
-    this.px = 150; this.cy = 128; this.fireT = 0; this.walk = 0;
-    this.doors = DOORS.map((x, i) => ({ x, hp: 3 + k.skill, hp0: 3 + k.skill, open: 0, t: 2 + i * 1.5, rel: 0 }));
-    this.rockets = []; this.troops = []; this.tanks = []; this.shots = [];
-    this.state = 'fight'; this.inv = 1; this.tankT = 8;
-  }
-  Kremlin.prototype.respawn = function () { this.state = 'fight'; this.inv = 2; this.shots = []; this.troops = this.troops.filter((t) => t.y < 150); this.rep = false; };
-  Kremlin.prototype.update = function (dt, I) {
-    this.t += dt;
+  Silo.prototype.hud = function () {
     const k = this.k;
-    this.booms.update(dt);
-    if (this.state === 'won') { this.endT += dt; if (Math.random() < dt * 6) { this.booms.add(rnd(20, 300), rnd(WALL_TOP, WALL_BOT), rnd(1, 2)); A.sfx('boom'); } if (this.endT > 2.5 && !this.rep) { this.rep = true; k.levelDone(8000); } return; }
-    if (this.state === 'dead') { this.deadT += dt; if (this.deadT > 1.5 && !this.rep) { this.rep = true; k.die(true); } this.world(dt); return; }
-    this.inv = Math.max(0, this.inv - dt);
-    let mv = 0;
-    if (I.is('left')) mv = -1;
-    if (I.is('right')) mv = 1;
-    this.px = Math.max(4, Math.min(W - 12, this.px + mv * 60 * dt));
-    this.walk += Math.abs(mv) * dt * 8;
-    if (I.is('up')) this.cy = Math.max(56, this.cy - 70 * dt);
-    if (I.is('down')) this.cy = Math.min(176, this.cy + 70 * dt);
-    this.fireT -= dt;
-    if (I.is('fire') && this.fireT <= 0 && !this.rockets.length) {
-      this.fireT = 0.4;
-      this.rockets.push({ x: this.px + 4, y: 168, ty: this.cy });
-      A.sfx('missile');
-    }
-    this.world(dt);
-  };
-  Kremlin.prototype.world = function (dt) {
-    const k = this.k, live = this.state === 'fight', rate = 0.8 + k.skill * 0.3;
-    for (const d of this.doors) {
-      if (d.hp <= 0) continue;
-      d.t -= dt;
-      if (d.t <= 0 && !d.opening && d.open === 0 && live) { d.opening = true; d.rel = 1 + (Math.random() < 0.3 + k.skill * 0.2 ? 1 : 0); A.sfx('door'); }
-      if (d.opening) {
-        d.open = Math.min(1, d.open + dt * 2);
-        if (d.open >= 1) {
-          d.relT = (d.relT || 0) - dt;
-          if (d.rel > 0 && d.relT <= 0 && this.troops.filter((t) => t.hp > 0).length < 3 + k.skill) { d.rel--; d.relT = 0.6; this.troops.push({ x: d.x + 5, y: WALL_BOT - 12, hp: 1, stop: rnd(146, 166), ft: rnd(0.8, 1.6), walk: 0 }); }
-          if (d.rel <= 0 || d.relT > 0.5 && d.rel === 0) { d.opening = false; d.closing = true; }
-        }
-      }
-      if (d.closing) { d.open = Math.max(0, d.open - dt * 1.5); if (d.open <= 0) { d.closing = false; d.t = rnd(3, 6) - k.skill; } }
-    }
-    for (const t of this.troops) {
-      if (t.hp <= 0) { t.dead = (t.dead || 0) + dt; continue; }
-      if (t.y < t.stop) { t.y += 14 * dt; t.walk += dt * 8; t.x += Math.sin(t.walk * 0.4) * 6 * dt; }
-      else {
-        t.ft -= dt * rate;
-        if (live && t.ft <= 0) {
-          t.ft = rnd(1.6, 2.6);
-          const dx = this.px + 4 - t.x, dy = 172 - t.y, d = Math.hypot(dx, dy) || 1;
-          this.shots.push({ x: t.x + 3, y: t.y + 4, vx: dx / d * 80, vy: dy / d * 80 });
-          A.sfx('enemyShot');
-        }
-      }
-    }
-    this.troops = this.troops.filter((t) => !(t.dead > 3));
-    this.tankT -= dt;
-    if (live && this.tankT <= 0 && !this.tanks.some((t) => t.hp > 0)) {
-      this.tankT = rnd(12, 18);
-      const dir = Math.random() < 0.5 ? 1 : -1;
-      this.tanks.push({ x: dir > 0 ? -20 : W + 4, dir, hp: 2, ft: 2 });
-    }
-    for (const t of this.tanks) {
-      if (t.hp <= 0) continue;
-      t.x += t.dir * 16 * dt;
-      t.ft -= dt * rate;
-      if (live && t.ft <= 0 && t.x > 0 && t.x < W - 16) {
-        t.ft = rnd(2.5, 3.5);
-        const dx = this.px + 4 - t.x - 8, dy = 172 - 150, d = Math.hypot(dx, dy) || 1;
-        this.shots.push({ x: t.x + 8, y: 150, vx: dx / d * 70, vy: dy / d * 70, big: true });
-        A.sfx('flak');
-      }
-    }
-    this.tanks = this.tanks.filter((t) => t.x > -30 && t.x < W + 30);
-    for (const r of this.rockets) {
-      r.y -= 170 * dt;
-      if (r.y <= r.ty) {
-        r.dead = true;
-        this.booms.add(r.x, r.ty, 1.2); A.sfx('boom');
-        for (const d of this.doors) {
-          if (d.hp > 0 && r.x >= d.x - 1 && r.x <= d.x + 19 && r.ty >= WALL_BOT - 26 && r.ty <= WALL_BOT) {
-            d.hp -= d.open > 0.5 ? 2 : 1;
-            A.sfx('hit');
-            if (d.hp <= 0) { d.hp = 0; k.addScore(1500); this.booms.add(d.x + 9, WALL_BOT - 12, 2.2); A.sfx('bigboom'); if (this.doors.every((q) => q.hp <= 0)) { this.state = 'won'; this.endT = 0; this.rep = false; k.addScore(5000); } }
-            else k.addScore(200);
-          }
-        }
-        for (const t of this.troops) if (t.hp > 0 && Math.abs(t.x + 4 - r.x) < 10 && Math.abs(t.y + 6 - r.ty) < 12) { t.hp = 0; k.addScore(100); }
-        for (const t of this.tanks) if (t.hp > 0 && Math.abs(t.x + 8 - r.x) < 14 && Math.abs(150 - r.ty) < 10) { t.hp--; if (t.hp <= 0) { k.addScore(500); this.booms.add(t.x + 8, 150, 1.5); } }
-      }
-    }
-    this.rockets = this.rockets.filter((r) => !r.dead);
-    for (const s of this.shots) {
-      s.x += s.vx * dt; s.y += s.vy * dt;
-      if (live && this.inv <= 0 && !k.game.god && s.x > this.px && s.x < this.px + 8 && s.y > 168 && s.y < 182) {
-        s.dead = true; this.state = 'dead'; this.deadT = 0; this.booms.add(this.px + 4, 174, 1); A.sfx('die');
-      }
-    }
-    this.shots = this.shots.filter((s) => !s.dead && s.y < PH && s.x > -4 && s.x < W + 4);
-  };
-  Kremlin.prototype.auto = function () {
-    const a = {};
-    const d = this.doors.find((q) => q.hp > 0);
-    if (!d) return a;
-    const tx = d.x + 5;
-    if (this.px < tx - 2) a.right = true; else if (this.px > tx + 2) a.left = true;
-    const ty = WALL_BOT - 12;
-    if (this.cy > ty + 2) a.up = true; else if (this.cy < ty - 2) a.down = true;
-    a.fire = Math.abs(this.px - tx) < 4;
-    return a;
-  };
-  Kremlin.prototype.draw = function () {
-    rect(0, 0, W, PH, 'k');
-    for (const [x, y] of this.k.stars) if (y < WALL_TOP) rect(x, y, 1, 1, 'w');
-    rect(0, WALL_TOP - 24, W, 24, 'b');
-    // domes of cathedrals behind the wall
-    for (const [x, r] of [[70, 7], [92, 5], [228, 8], [250, 5]]) { circle(x, WALL_TOP - 8, r, 'y'); rect(x, WALL_TOP - 8 - r - 6, 1, 6, 'y'); rect(x - r, WALL_TOP - 8, r * 2 + 1, 8, 'l'); }
-    // wall
-    rect(0, WALL_TOP, W, WALL_BOT - WALL_TOP, 'r');
-    for (let y = WALL_TOP + 4; y < WALL_BOT; y += 6) for (let x = ((y / 6) % 2) * 6; x < W; x += 12) rect(x, y, 1, 3, 'n');
-    for (let y = WALL_TOP + 3; y < WALL_BOT; y += 6) rect(0, y, W, 1, 'n');
-    for (let x = 0; x < W; x += 10) { rect(x, WALL_TOP - 6, 6, 6, 'r'); rect(x + 2, WALL_TOP - 6, 2, 2, 'k'); }
-    // towers
-    const tower = (x, w, h, clock) => {
-      rect(x, WALL_TOP - h, w, h + (WALL_BOT - WALL_TOP), 'r');
-      rect(x - 1, WALL_TOP - h, w + 2, 2, 'l');
-      for (let i = 0; i < 18; i++) rect(x + (w / 2) * (i / 18), WALL_TOP - h - i, w * (1 - i / 18), 1, 'g');
-      rect(x + w / 2 - 1, WALL_TOP - h - 24, 3, 4, blink(this.t, 1) ? 'R' : 'r');
-      if (clock) { circle(x + w / 2, WALL_TOP - h + 12, 5, 'w'); rect(x + w / 2, WALL_TOP - h + 8, 1, 4, 'k'); rect(x + w / 2, WALL_TOP - h + 12, 3, 1, 'k'); }
-    };
-    tower(4, 16, 16); tower(86, 16, 20); tower(146, 28, 40, true); tower(220, 16, 20); tower(300, 16, 16);
-    // doors of the defense center
-    for (const d of this.doors) {
-      const y = WALL_BOT - 26;
-      rect(d.x - 2, y - 3, 22, 29, 'd');
-      if (d.hp <= 0) { rect(d.x, y, 18, 26, 'k'); circle(d.x + 9, y + 14, 4 + (blink(this.t, 8) ? 1 : 0), blink(this.t, 6) ? 'o' : 'y'); continue; }
-      rect(d.x, y, 18, 26, 'k');
-      const sh = Math.round(d.open * 22);
-      rect(d.x, y, 18, 26 - sh, 'm');
-      for (let yy = y + 3; yy < y + 26 - sh; yy += 4) rect(d.x, yy, 18, 1, 'd');
-      for (let i = 0; i < d.hp0; i++) rect(d.x + 1 + i * 3, y - 6, 2, 2, i < d.hp ? 'G' : 'd');
-    }
-    // square
-    rect(0, WALL_BOT, W, PH - WALL_BOT, 'd');
-    for (let y = WALL_BOT + 3; y < PH; y += 5) for (let x = (y % 2) * 4; x < W; x += 9) rect(x, y, 4, 1, 'm');
-    for (const t of this.tanks) blit(tankSpr(t.hp <= 0), t.x, 143, t.dir < 0);
-    for (const t of this.troops) {
-      if (t.hp <= 0) { rect(t.x, t.y + 9, 8, 3, 'g'); continue; }
-      drawSoldier(t.x, t.y, Math.floor(t.walk) % 2, 'g', 'n');
-    }
-    for (const s of this.shots) rect(s.x - 1, s.y - 1, s.big ? 3 : 2, s.big ? 3 : 2, s.big ? 'y' : 'R');
-    for (const r of this.rockets) { rect(r.x - 1, r.y, 2, 4, 'w'); rect(r.x - 1, r.y + 4, 2, 2, blink(this.t, 12) ? 'y' : 'o'); }
-    this.booms.draw();
-    if (this.state !== 'dead' && !(this.inv > 0 && blink(this.t, 10))) {
-      drawSoldier(this.px, 170, Math.floor(this.walk) % 2, 'B', 'b');
-      rect(this.px + 5, 168, 2, 8, 'g');
-      // crosshair
-      const x = this.px + 4, y = Math.round(this.cy);
-      rect(x - 4, y, 3, 1, 'y'); rect(x + 2, y, 3, 1, 'y'); rect(x, y - 4, 1, 3, 'y'); rect(x, y + 2, 1, 3, 'y');
-    }
+    text('LAUNCH SITE:', 0, row(0), 'G'); text(k.siteName(), 104, row(0), 'o');
+    text('ALTITUDE', 0, row(1), 'L'); text(pad(this.A, 2) + ' M', 72, row(1), 'w');
+    k.impactRow(3);
+    k.aircraftRow(4);
   };
 
   /* =====================================================================
-     LEVEL 5 — Reactor room (top-down disc duel)
+     SEQUENCE V — the Soviet Defense Center
      ===================================================================== */
-  const RL = 32, RR = 288;
-  function Reactor(k) {
+  const DOOR_X = [126, 142, 158, 174, 190];
+  const dY = (d) => 140 - d * 47;
+  const DCONV = 0.45;
+  const dX = (x0, d) => 160 + (x0 - 160) * (1 - DCONV * d);
+  const wallTop = (x) => (x < 160 ? 46 + (x / 102) * 24 : 46 + ((320 - x) / 102) * 24);
+  function Center(k) {
     this.k = k; this.t = 0; this.booms = new Booms();
-    this.px = 156; this.walk = 0; this.mv = 0; this.fireT = 0;
-    this.rx = 152; this.rvx = 0; this.rhp = 6 + k.skill * 2; this.rhp0 = this.rhp; this.throwT = 2; this.hitT = 0;
-    this.core = 3; this.discs = [];
+    this.x = 160; this.elev = 6; this.load = 0;
+    this.right = (Math.random() * 5) | 0;
+    this.doors = DOOR_X.map(() => 'shut');
+    this.found = false;
+    this.soldiers = [
+      { sx: 82, d: 0.88, alive: true, rt: 0, ft: 2 }, { sx: 238, d: 0.88, alive: true, rt: 0, ft: 2.8 },
+      { sx: 96, d: 0.93, alive: true, rt: 0, ft: 3.5 }, { sx: 224, d: 0.93, alive: true, rt: 0, ft: 4 },
+    ].slice(0, 2 + k.lvl);
+    this.towers = [{ x: 84, y: 50, alive: true }, { x: 236, y: 50, alive: true }, { x: 136, y: 6, alive: true }, { x: 184, y: 6, alive: true }];
+    this.tank = null; this.tankT = 6;
+    this.shells = []; this.bullets = [];
     this.state = 'fight'; this.inv = 1;
   }
-  Reactor.prototype.respawn = function () { this.state = this.rhp > 0 ? 'fight' : 'core'; this.inv = 2; this.discs = this.discs.filter((d) => d.mine); this.rep = false; };
-  Reactor.prototype.update = function (dt, I) {
+  Center.prototype.timed = false;
+  Center.prototype.respawn = function () { this.state = 'fight'; this.inv = 2; this.bullets = []; this.rep = false; };
+  Center.prototype.update = function (dt, I) {
     this.t += dt;
     const k = this.k;
     this.booms.update(dt);
-    if (this.state === 'melt') { this.endT += dt; if (Math.random() < dt * 10) { this.booms.add(rnd(RL, RR), rnd(10, 170), rnd(1, 2.5)); A.sfx('boom'); } if (this.endT > 3 && !this.rep) { this.rep = true; k.levelDone(25000); } return; }
-    if (this.state === 'dead') { this.deadT += dt; if (this.deadT > 1.5 && !this.rep) { this.rep = true; k.die(true); } this.world(dt); return; }
+    if (this.state === 'dead') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.men--; if (k.men <= 0) k.gameOver('THE COMMANDO TEAM WAS LOST'); else this.respawn(); } return; }
+    if (this.state === 'enter') { this.ct += dt; if (this.ct > 2.4 && !this.rep) { this.rep = true; k.addScore(5000); k.centerDone(); } return; }
     this.inv = Math.max(0, this.inv - dt);
-    this.mv = 0;
-    if (I.is('left')) this.mv = -1;
-    if (I.is('right')) this.mv = 1;
-    this.px = Math.max(RL + 2, Math.min(RR - 10, this.px + this.mv * 75 * dt));
-    this.walk += Math.abs(this.mv) * dt * 8;
-    this.fireT -= dt;
-    if (I.is('fire') && this.fireT <= 0 && this.discs.filter((d) => d.mine).length < 2) {
-      this.fireT = 0.45;
-      this.discs.push({ mine: true, x: this.px + 4, y: 164, vx: this.mv * 75, vy: -140, b: 0 });
-      A.sfx('throw');
+    if (I.is('left')) this.x -= 64 * dt;
+    if (I.is('right')) this.x += 64 * dt;
+    this.x = clamp(this.x, 14, 306);
+    this.eT = (this.eT || 0) - dt;
+    if (this.eT <= 0) {
+      if (I.is('up')) { this.elev = Math.min(12, this.elev + 1); this.eT = 0.14; }
+      else if (I.is('down')) { this.elev = Math.max(1, this.elev - 1); this.eT = 0.14; }
     }
-    this.world(dt);
+    this.load = Math.max(0, this.load - dt);
+    if (I.is('fire') && this.load <= 0) {
+      this.load = 1.3;
+      const d = this.elev / 12;
+      this.shells.push({ x0: this.x, d, t: 0, dur: 0.6 + d * 0.5 });
+      A.sfx('missile');
+    }
+    for (const s of this.soldiers) {
+      if (!s.alive) { s.rt -= dt; if (s.rt <= 0) { s.alive = true; s.ft = 2; } continue; }
+      s.ft -= dt * (0.7 + k.lvl * 0.3);
+      if (s.ft <= 0) { s.ft = rnd(2.5, 4.2); this.bullets.push({ x0: s.sx, y0: wallTop(s.sx) - 4, tx: this.x, t: 0, dur: 1.1 }); A.sfx('enemyShot'); }
+    }
+    this.tankT -= dt;
+    if (!this.tank && this.tankT <= 0) {
+      const left = Math.random() < 0.5;
+      this.tank = { side: left ? -1 : 1, d: 0.82, sx: left ? 60 : 260, hp: 2, ft: 2.5 };
+      A.sfx('door');
+    }
+    if (this.tank) {
+      const T = this.tank;
+      T.d = Math.max(0.45, T.d - 0.05 * dt);
+      T.sx += -T.side * 9 * dt;
+      T.ft -= dt;
+      if (T.ft <= 0) { T.ft = rnd(2.6, 3.6); this.bullets.push({ x0: T.sx, y0: dY(T.d) - 4, tx: this.x, t: 0, dur: 1.3, big: true }); A.sfx('flak'); }
+    }
+    for (const sh of this.shells) { sh.t += dt; if (sh.t >= sh.dur) { sh.dead = true; this.land(sh); } }
+    for (const b of this.bullets) {
+      b.t += dt;
+      if (b.t >= b.dur) {
+        b.dead = true;
+        if (this.state === 'fight' && this.inv <= 0 && !k.game.god && Math.abs(this.x - b.tx) < (b.big ? 10 : 7)) {
+          this.state = 'dead'; this.ct = 0; this.booms.add(this.x, 146, 1.2); A.sfx('die');
+        }
+      }
+    }
+    this.shells = this.shells.filter((s) => !s.dead);
+    this.bullets = this.bullets.filter((b) => !b.dead);
+    if (this.found && !this.tank && this.soldiers.every((s) => !s.alive) && this.state === 'fight') { this.state = 'enter'; this.ct = 0; A.sfx('clear'); }
   };
-  Reactor.prototype.world = function (dt) {
-    const k = this.k, live = this.state === 'fight' || this.state === 'core';
-    if (this.rhp > 0) {
-      const target = Math.max(RL + 4, Math.min(RR - 20, this.px - 4 + Math.sin(this.t) * 50));
-      this.rvx += Math.sign(target - this.rx) * 140 * dt;
-      this.rvx = Math.max(-55, Math.min(55, this.rvx * (1 - dt)));
-      this.rx = Math.max(RL + 2, Math.min(RR - 18, this.rx + this.rvx * dt));
-      this.hitT = Math.max(0, this.hitT - dt);
-      this.throwT -= dt * (0.8 + k.skill * 0.3);
-      if (this.state === 'fight' && this.throwT <= 0) {
-        this.throwT = rnd(1.1, 2);
-        let tx = this.px + 4;
-        if (Math.random() < 0.45) tx = Math.random() < 0.5 ? 2 * RL - tx : 2 * RR - tx;
-        const dx = tx - (this.rx + 8), dy = 170 - 52, d = Math.hypot(dx, dy);
-        const sp = 105 + k.skill * 15;
-        this.discs.push({ mine: false, x: this.rx + 8, y: 52, vx: dx / d * sp, vy: dy / d * sp, b: 0 });
+  Center.prototype.land = function (sh) {
+    const k = this.k;
+    const x = dX(sh.x0, sh.d), y = dY(sh.d);
+    this.booms.add(x, y - 2, 1);
+    A.sfx('boom');
+    for (const s of this.soldiers) if (s.alive && Math.abs(x - s.sx) < 7 && Math.abs(sh.d - s.d) < 0.1) { this.booms.add(s.sx, wallTop(s.sx) - 4, 0.9); s.alive = false; s.rt = rnd(12, 16) - k.lvl; k.addScore(300); }
+    if (this.tank && Math.abs(x - this.tank.sx) < 11 && Math.abs(sh.d - this.tank.d) < 0.12) {
+      this.tank.hp--;
+      if (this.tank.hp <= 0) { k.addScore(800); this.booms.add(this.tank.sx, dY(this.tank.d) - 4, 1.8); this.tank = null; this.tankT = rnd(12, 18) - k.lvl * 2; }
+    }
+    if (sh.d > 0.9) for (const t of this.towers) if (t.alive && Math.abs(x - t.x) < 6) { t.alive = false; k.addScore(500); this.booms.add(t.x, t.y + 6, 1.4); }
+    if (sh.d >= 0.96) {
+      DOOR_X.forEach((dx, i) => {
+        if (Math.abs(x - dx) <= 6 && this.doors[i] === 'shut') {
+          if (i === this.right) { this.doors[i] = 'open'; this.found = true; k.addScore(2000); A.sfx('clear'); }
+          else { this.doors[i] = 'red'; k.addScore(100); A.sfx('hit'); }
+        }
+      });
+    }
+  };
+  Center.prototype.auto = function () {
+    const a = {};
+    let tx, d;
+    const alive = this.soldiers.filter((s) => s.alive);
+    if (this.tank) { tx = this.tank.sx; d = this.tank.d; }
+    else if (!this.found) { tx = DOOR_X[this.doors.findIndex((s) => s === 'shut')]; d = 1; }
+    else if (alive.length) { const n = alive.map((q) => [Math.abs(160 + (q.sx - 160) / (1 - DCONV * q.d) - this.x), q]).sort((p, q) => p[0] - q[0])[0][1]; tx = n.sx; d = n.d; }
+    else return a;
+    const x0 = 160 + (tx - 160) / (1 - DCONV * d);
+    const e = clamp(Math.round(d * 12), 1, 12);
+    if (this.x < x0 - 1.5) a.right = true; else if (this.x > x0 + 1.5) a.left = true;
+    if (this.elev < e) a.up = true; else if (this.elev > e) a.down = true;
+    a.fire = Math.abs(this.x - x0) < 3 && this.elev === e;
+    for (const b of this.bullets) if (b.dur - b.t < 0.4 && Math.abs(this.x - b.tx) < 10) { a.left = this.x > 160; a.right = !a.left; a.fire = false; }
+    return a;
+  };
+  Center.prototype.draw = function () {
+    rect(0, 0, W, PF, 'k');
+    rect(0, 0, W, 76, 'b');
+    for (let x = 0; x < 320; x += 4) {
+      const h = 14 + Math.abs(Math.sin(x * 0.07) * 14) + ((x * 13) % 7) + (Math.sin(x * 0.31) > 0.6 ? 10 : 0);
+      rect(x, 76 - h, 4, h, 'k');
+      if ((x * 7) % 9 < 4) rect(x, 76 - h, 3, 2, 'w');
+    }
+    poly([[0, 46], [102, 70], [102, 96], [0, 106]], 'N');
+    poly([[320, 46], [218, 70], [218, 96], [320, 106]], 'N');
+    rect(46, 88, 26, 10, 'B'); rect(248, 88, 26, 10, 'B');
+    for (const t of this.towers.slice(0, 2)) {
+      if (!t.alive) { rect(t.x - 4, t.y + 8, 8, 4, 'D'); continue; }
+      rect(t.x - 4, t.y + 6, 8, 8, 'w'); ell(t.x, t.y + 5, 4.5, 4, 'g'); rect(t.x - 0.5, t.y - 3, 1, 4, 'g');
+    }
+    // the Defense Center (the State Historical Museum)
+    rect(110, 40, 100, 56, 'N');
+    rect(110, 82, 100, 14, 'n');
+    poly([[140, 40], [160, 28], [180, 40]], 'O'); poly([[146, 40], [160, 32], [174, 40]], 'y');
+    for (const [x, w, top] of [[114, 14, 44], [196, 14, 44], [128, 16, 24], [176, 16, 24]]) {
+      rect(x, top, w, 56 - (top - 40), 'N');
+      for (let yy = top + 6; yy < 80; yy += 9) rect(x + 3, yy, w - 6, 4, Math.floor(yy / 9) % 2 ? 'Y' : 'w');
+    }
+    for (const t of this.towers.slice(2)) {
+      if (!t.alive) { rect(t.x - 3, 22, 6, 4, 'D'); continue; }
+      rect(t.x - 3, 14, 6, 12, 'w'); rect(t.x - 1.5, 8, 3, 6, 'w'); rect(t.x - 0.5, 2, 1, 6, 'w');
+      rect(t.x - 2, 18, 4, 4, 'k');
+    }
+    for (let x = 148; x < 174; x += 6) rect(x, 50, 4, 6, 'c');
+    for (let x = 116; x < 206; x += 10) rect(x, 66, 6, 2, 'w');
+    DOOR_X.forEach((dx, i) => {
+      const st = this.doors[i];
+      const k2 = st === 'open' ? 'w' : st === 'red' ? 'r' : 'm';
+      rect(dx - 5, 84, 10, 12, k2); ell(dx, 84, 5, 3, k2);
+      if (st === 'open') rect(dx - 2, 87, 4, 4, blink(this.t, 3) ? 'k' : 'w');
+      else rect(dx - 3, 86, 6, 10, 'k');
+    });
+    for (const s of this.soldiers) if (s.alive) blit(figure('w'), s.sx, wallTop(s.sx) - 4, { sc: 0.75 });
+    if (this.tank) { const T = this.tank, s = 0.7 + (1 - T.d) * 0.9; ell(T.sx + 2, dY(T.d) + 1, 8 * s, 2 * s, 'D'); blit(tankSpr(), T.sx, dY(T.d) - 4 * s, { sc: s, flip: T.side < 0 }); }
+    for (const sh of this.shells) {
+      const f = sh.t / sh.dur;
+      const x = sh.x0 + (dX(sh.x0, sh.d) - sh.x0) * f, y = 140 + (dY(sh.d) - 140) * f - Math.sin(Math.PI * f) * (30 + sh.d * 40);
+      ell(x, y, 1.6 * (1 - f * 0.5), 1.6 * (1 - f * 0.5), 'w');
+    }
+    for (const b of this.bullets) { const f = b.t / b.dur; rect(b.x0 + (b.tx - b.x0) * f - 0.5, b.y0 + (146 - b.y0) * f, b.big ? 2 : 1.5, b.big ? 2 : 1.5, b.big ? 'y' : 'w'); }
+    this.booms.draw();
+    // commando behind the trench wall
+    if (this.state !== 'dead' && !(this.inv > 0 && blink(this.t, 10))) {
+      const ang = -0.25 - (this.elev / 12) * 0.9;
+      line(this.x + 2, 140, this.x + 2 + Math.cos(ang) * 12, 140 + Math.sin(ang) * 12, 'G', 2.6);
+      ell(this.x - 3, 140, 6, 5, 'o'); ell(this.x - 3, 134, 3.6, 3.4, 'l');
+    }
+    rect(0, 143, W, 9, 'c');
+    for (let x = 6; x < W; x += 16) rect(x, 143, 1.5, 9, 'b');
+    rect(0, 152, W, 8, 'w');
+    if (this.state === 'enter') text('THE DEFENSE CENTER IS OPEN', 160, 120, 'w', 'center');
+    else if (this.found && blink(this.t, 2)) text('DOOR FOUND - CLEAR THE AREA', 160, 120, 'G', 'center');
+  };
+  Center.prototype.hud = function () {
+    const k = this.k;
+    text('ELEVATION', 0, row(1), 'L'); text(pad(this.elev, 2), 80, row(1), 'w');
+    text('STATUS:', 128, row(1), 'y'); text(this.load > 0 ? 'LOADING' : 'READY', 192, row(1), this.load > 0 ? 'm' : 'G');
+    k.aircraftRow(4, true);
+  };
+
+  /* =====================================================================
+     SEQUENCE VI — inside the reactor room
+     ===================================================================== */
+  const ZP = -0.35, ZR = 0.45;
+  const fz = (z) => 1 / (1 + 0.806 * z);
+  const rY = (z) => (z >= 0 ? 70 + (47 * (fz(z) - fz(1))) / (1 - fz(1)) : 117 + (z / ZP) * 33);
+  const rHW = (z) => (z >= 0 ? 112 * fz(z) : 112 + (z / ZP) * 26);
+  const rX = (x, z) => 160 + x * rHW(z);
+  function Reactor(k) {
+    this.k = k; this.t = 0; this.booms = new Booms();
+    this.px = 0; this.aim = 0.3; this.disc = null; this.shots = [];
+    // robot progress survives a trip back outside for more discs
+    this.robotsLeft = k.robotsLeft !== undefined ? k.robotsLeft : [2, 4, 5][k.lvl];
+    this.etcm = null;
+    this.newRobot();
+    if (k.robotHits) this.robot.hits = k.robotHits;
+    this.state = 'fight'; this.inv = 1;
+  }
+  Reactor.prototype.timed = false;
+  Reactor.prototype.newRobot = function () {
+    const n = [2, 4, 5][this.k.lvl] - this.robotsLeft;
+    this.robot = { x: rnd(-0.6, 0.6), v: 0.32 + n * 0.06, dir: Math.random() < 0.5 ? -1 : 1, hits: 0, ft: 2.5, flash: 0 };
+    if (this.robotsLeft === 1) { this.etcm = [100, 85, 70][this.k.lvl]; A.sfx('alarm'); }
+  };
+  Reactor.prototype.respawn = function () { this.state = 'fight'; this.inv = 2; this.shots = []; this.rep = false; };
+  Reactor.prototype.update = function (dt, I) {
+    this.t += dt;
+    const k = this.k, R = this.robot;
+    this.booms.update(dt);
+    if (this.etcm !== null && this.state !== 'won') {
+      this.etcm -= dt;
+      if (this.etcm <= 0 && this.state !== 'boom') { this.state = 'boom'; this.ct = 0; this.rep = false; A.sfx('bigboom'); }
+    }
+    if (this.state === 'boom') {
+      this.ct += dt;
+      if (Math.random() < dt * 10) { this.booms.add(rnd(60, 260), rnd(20, 140), rnd(1.5, 3)); A.sfx('boom'); }
+      if (this.ct > 3 && !this.rep) { this.rep = true; k.go(new Ending(k, false, 0)); }
+      return;
+    }
+    if (this.state === 'won') {
+      this.ct += dt;
+      if (this.ct > 2.5 && !this.rep) { this.rep = true; const safe = this.etcm === null || this.etcm > 15; k.go(new Ending(k, safe, safe ? k.men : 0)); }
+      return;
+    }
+    if (this.state === 'dead') { this.ct += dt; if (this.ct > 2 && !this.rep) { this.rep = true; k.men--; if (k.men <= 0) k.gameOver('THE COMMANDO TEAM WAS LOST'); else this.respawn(); } }
+    if (this.state === 'nodisc') { this.ct += dt; if (this.ct > 2.5 && !this.rep) { this.rep = true; k.go(new Center(k)); } return; }
+    const live = this.state === 'fight';
+    this.inv = Math.max(0, this.inv - dt);
+    if (live) {
+      if (I.is('left')) this.px -= 0.8 * dt;
+      if (I.is('right')) this.px += 0.8 * dt;
+      this.px = clamp(this.px, -1, 1);
+      // laser guidance: forward moves the dot right, back moves it left
+      if (I.is('up')) this.aim += 0.7 * dt;
+      if (I.is('down')) this.aim -= 0.7 * dt;
+      this.aim = clamp(this.aim, -1, 1);
+      if (I.is('fire') && !this.disc && k.discs > 0) {
+        k.discs--;
+        this.disc = { x0: this.px, xt: this.aim, z: ZP, dir: 1, x: this.px };
         A.sfx('throw');
       }
     }
-    for (const d of this.discs) {
-      d.x += d.vx * dt; d.y += d.vy * dt;
-      if (d.x < RL + 2 || d.x > RR - 2) { d.vx = -d.vx; d.x = Math.max(RL + 2, Math.min(RR - 2, d.x)); d.b++; A.sfx('bounce'); }
-      if (d.mine) {
-        if (this.rhp > 0 && d.y < 56 && d.y > 28 && d.x > this.rx - 6 && d.x < this.rx + 22) {
-          if (Math.abs(d.vx) < 40) { d.mine = false; d.vy = Math.abs(d.vy); d.vx += rnd(-30, 30); A.sfx('clank'); }
-          else {
-            d.dead = true; this.rhp--; this.hitT = 0.2; k.addScore(500); A.sfx('hit'); this.booms.add(d.x, d.y, 0.8);
-            if (this.rhp <= 0) { this.state = this.state === 'dead' ? 'dead' : 'core'; this.booms.add(this.rx + 8, 42, 2.5); A.sfx('bigboom'); k.addScore(10000); this.discs = this.discs.filter((q) => q.mine); }
-          }
-        }
-        if (this.rhp <= 0 && d.y < 26 && d.x > 148 && d.x < 172) {
-          d.dead = true; this.core--; A.sfx('hit'); this.booms.add(d.x, 22, 1.2); k.addScore(1000);
-          if (this.core <= 0) { this.state = 'melt'; this.endT = 0; this.rep = false; A.sfx('bigboom'); }
-        }
-        for (const e of this.discs) if (!e.mine && !e.dead && Math.abs(e.x - d.x) < 5 && Math.abs(e.y - d.y) < 4) { e.dead = true; d.dead = true; k.addScore(100); A.sfx('clank'); }
-      } else if (live && this.inv <= 0 && !k.game.god && d.y > 160 && d.y < 182 && d.x > this.px - 2 && d.x < this.px + 10) {
-        d.dead = true; this.state = 'dead'; this.deadT = 0; this.booms.add(this.px + 4, 174, 1); A.sfx('die');
+    R.x += R.dir * R.v * dt;
+    if (Math.abs(R.x) > 0.82) { R.x = Math.sign(R.x) * 0.82; R.dir *= -1; }
+    if (Math.random() < dt * 0.12) R.dir *= -1;
+    R.flash = Math.max(0, R.flash - dt);
+    R.ft -= dt * (1 + R.hits * 0.25);
+    if (live && R.ft <= 0) { R.ft = rnd(1.8, 3) - k.lvl * 0.3; this.shots.push({ x0: R.x, tx: this.px, t: 0, dur: 1.4 - R.hits * 0.12 }); A.sfx('enemyShot'); }
+    for (const s of this.shots) {
+      s.t += dt;
+      if (s.t >= s.dur) {
+        s.dead = true;
+        if (live && this.inv <= 0 && !k.game.god && Math.abs(this.px - s.tx) < 0.09) { this.state = 'dead'; this.ct = 0; this.booms.add(rX(this.px, ZP), 140, 1); A.sfx('die'); }
       }
     }
-    this.discs = this.discs.filter((d) => !d.dead && d.y > 4 && d.y < PH && d.b < 5);
+    this.shots = this.shots.filter((s) => !s.dead);
+    // disc: out to the back wall, bounce, and back towards the ledge
+    const d = this.disc;
+    if (d) {
+      const prevZ = d.z;
+      d.z += d.dir * 1.05 * dt;
+      if (d.dir > 0 && d.z >= 1) { d.z = 1; d.dir = -1; A.sfx('bounce'); }
+      const span = 1 - ZP;
+      d.x = d.dir > 0 ? d.x0 + ((d.xt - d.x0) * (d.z - ZP)) / span : d.xt + ((d.xt - d.x0) * (1 - d.z)) / span;
+      if (Math.abs(d.x) > 1) d.x = Math.sign(d.x) * 2 - d.x;
+      const crossed = (prevZ - ZR) * (d.z - ZR) <= 0 && prevZ !== d.z;
+      if (crossed && Math.abs(d.x - R.x) < 0.13) {
+        this.disc = null;
+        if (d.dir > 0) { A.sfx('clank'); this.booms.add(rX(d.x, ZR), rY(ZR) - 8, 0.4); } // armoured front
+        else { R.hits++; R.flash = 0.25; k.addScore(500); A.sfx('hit'); if (R.hits >= 4) this.robotDown(); }
+      } else if (d.dir < 0 && d.z <= ZP) {
+        if (Math.abs(d.x - this.px) < 0.13 && live) { k.discs++; A.sfx('select'); }
+        this.disc = null;
+      }
+    }
+    if (live && !this.disc && k.discs <= 0 && this.state === 'fight') { this.state = 'nodisc'; this.ct = 0; this.rep = false; k.robotsLeft = this.robotsLeft; k.robotHits = this.robot.hits; }
+  };
+  Reactor.prototype.robotDown = function () {
+    const k = this.k;
+    this.booms.add(rX(this.robot.x, ZR), rY(ZR) - 10, 2);
+    A.sfx('bigboom');
+    k.addScore(3000);
+    k.discs++;
+    this.robotsLeft--;
+    k.robotsLeft = this.robotsLeft; k.robotHits = 0;
+    if (this.robotsLeft <= 0) { this.state = 'won'; this.ct = 0; this.rep = false; k.addScore(10000); return; }
+    this.newRobot();
   };
   Reactor.prototype.auto = function () {
     const a = {};
-    for (const d of this.discs) if (!d.mine && d.vy > 0 && d.y > 110 && Math.abs(d.x - this.px - 4) < 14) { if (d.x > this.px + 4) a.left = true; else a.right = true; return a; }
-    if (this.rhp <= 0) {
-      if (this.px < 152) a.right = true; else if (this.px > 160) a.left = true; else a.fire = true;
+    const R = this.robot;
+    for (const s of this.shots) if (s.dur - s.t < 0.5 && Math.abs(this.px - s.tx) < 0.14) { if (this.px > 0) a.left = true; else a.right = true; return a; }
+    if (this.disc) {
+      if (this.disc.dir < 0) { const land = clamp(2 * this.disc.xt - this.disc.x0, -1, 1); if (this.px < land - 0.04) a.right = true; else if (this.px > land + 0.04) a.left = true; }
       return a;
     }
-    // predict where an angled throw meets the robot line (with wall bounces)
-    const at = (mv) => {
-      let x = this.px + 4, vx = mv * 75;
-      const tt = (164 - 42) / 140;
-      x += vx * tt;
-      while (x < RL + 2 || x > RR - 2) x = x < RL + 2 ? 2 * (RL + 2) - x : 2 * (RR - 2) - x;
-      return x;
-    };
-    const rxAt = this.rx + this.rvx * 0.6 + 8;
-    for (const mv of [-1, 1]) {
-      if (Math.abs(at(mv) - rxAt) < 7) { a.fire = true; if (mv < 0) a.left = true; else a.right = true; return a; }
-    }
-    const tx = this.rx > 160 ? 70 : 240;
-    if (this.px < tx - 4) a.right = true; else if (this.px > tx + 4) a.left = true;
+    // aim so the return path crosses the robot's predicted position
+    const at = (tt) => { let x = R.x + R.dir * R.v * tt; for (let i = 0; i < 3; i++) { if (x > 0.82) x = 1.64 - x; else if (x < -0.82) x = -1.64 - x; } return x; };
+    const rx = at((1 - ZP) / 1.05 + (1 - ZR) / 1.05);
+    const k2 = (1 - ZR) / (1 - ZP);
+    const want = clamp((rx + k2 * this.px) / (1 + k2), -1, 1);
+    const outX = this.px + ((want - this.px) * (ZR - ZP)) / (1 - ZP);
+    if (Math.abs(outX - at((ZR - ZP) / 1.05)) < 0.2) { if (this.px > 0) a.left = true; else a.right = true; return a; }
+    if (this.aim < want - 0.03) a.up = true; else if (this.aim > want + 0.03) a.down = true;
+    else a.fire = true;
     return a;
   };
   Reactor.prototype.draw = function () {
-    rect(0, 0, W, PH, 'k');
-    // floor grid
-    rect(RL, 26, RR - RL, PH - 26, 'd');
-    for (let y = 30; y < PH; y += 12) rect(RL, y, RR - RL, 1, 'k');
-    for (let x = RL + 8; x < RR; x += 16) rect(x, 26, 1, PH - 26, 'k');
-    rect(RL, 150, RR - RL, 1, 'y');
-    // walls
-    rect(0, 0, RL, PH, 'm'); rect(RR, 0, W - RR, PH, 'm');
-    for (let y = 8; y < PH; y += 24) { rect(RL - 4, y, 3, 10, blink(this.t + y, 1) ? 'c' : 'b'); rect(RR + 1, y, 3, 10, blink(this.t + y, 1) ? 'c' : 'b'); }
-    // back wall + reactor core
-    rect(RL, 0, RR - RL, 26, 'l');
-    for (let x = RL; x < RR; x += 20) rect(x, 0, 2, 26, 'm');
-    const pulse = blink(this.t, this.state === 'melt' ? 10 : 2);
-    rect(146, 2, 28, 24, 'k');
-    rect(150, 4, 20, 22, pulse ? 'c' : 'B');
-    rect(156, 4, 8, 22, 'w');
-    if (this.rhp > 0) for (let x = 147; x < 174; x += 4) rect(x, 2, 2, 24, 'm');
-    else for (let i = 0; i < this.core; i++) rect(150 + i * 7, 28, 5, 3, 'R');
-    // robot
-    if (this.rhp > 0) {
-      blit(robotSpr(this.hitT > 0), this.rx, 34, false, 1.5);
-      rect(this.rx - 10, 36, 6, 18, 'y'); rect(this.rx - 9, 37, 4, 16, 'o'); // shield
-      for (let i = 0; i < this.rhp0; i++) rect(this.rx - 4 + i * 3, 58, 2, 2, i < this.rhp ? 'R' : 'k');
-    } else rect(this.rx, 44, 16, 6, 'k');
-    for (const d of this.discs) { rect(d.x - 4, d.y - 1, 8, 3, d.mine ? 'c' : 'R'); rect(d.x - 2, d.y - 2, 4, 1, d.mine ? 'c' : 'R'); rect(d.x - 1, d.y - 1, 2, 2, 'w'); }
-    if (this.state !== 'dead' && !(this.inv > 0 && blink(this.t, 10))) blit(soldierSpr(Math.floor(this.walk) % 2, 'B', 'b'), this.px, 166, false, 1.5);
+    rect(0, 0, W, PF, 'N');
+    poly([[30, 3], [290, 3], [226, 13], [94, 13]], 'k');
+    rect(98, 13, 124, 57, this.etcm !== null && this.etcm < 20 && blink(this.t, 4) ? 'R' : 'y');
+    rect(160 + this.aim * 62 - 1, 58, 2.5, 2, 'k'); // laser guidance dot
+    poly([[48, 117], [272, 117], [222, 70], [98, 70]], 'd');
+    for (const z of [0.15, 0.45, 0.78]) for (const x of [-0.62, 0, 0.62]) {
+      const y = rY(z), w = rHW(z) * 0.09;
+      poly([[rX(x, z) - w, y - 1.5], [rX(x, z) + w, y - 1.5], [rX(x, z) + w * 1.15, y + 1.5], [rX(x, z) - w * 1.15, y + 1.5]], 'c');
+    }
+    rect(48, 117, 224, 31, 'k');
+    poly([[4, 148], [316, 148], [320, 160], [0, 160]], 'd');
+    for (const x of [8, 312]) { rect(x - 1, 138, 2.5, 14, 'w'); line(x, 138, x + (x < 160 ? 6 : -6), 132, 'k', 1); }
+    for (const x of [22, 298]) { line(x, 100, x + (x < 160 ? 4 : -4), 92, 'k', 1.5); line(x - 3, 108, x + (x < 160 ? 1 : -1), 102, 'k', 1.5); }
+    const R = this.robot;
+    if (this.state !== 'won') {
+      const s = fz(ZR) * 0.95;
+      ell(rX(R.x, ZR), rY(ZR) + 1, 9 * s, 2 * s, 'k');
+      blit(robotSpr(R.flash > 0), rX(R.x, ZR), rY(ZR) - 8 * s, { sc: s });
+    }
+    for (const sh of this.shots) {
+      const f = sh.t / sh.dur, z = ZR + (ZP - ZR) * f, x = sh.x0 + (sh.tx - sh.x0) * f;
+      rect(rX(x, z) - 0.6, rY(z) - 6, 1.5, 3, 'w');
+    }
+    const d = this.disc;
+    if (d) { const s = d.z >= 0 ? fz(d.z) : 1.2; ell(rX(d.x, d.z), rY(d.z) - 4 * s, 3 * s, 1.1 * s, 'L'); }
+    if (this.state !== 'dead' && !(this.inv > 0 && blink(this.t, 10))) blit(figure('w'), rX(this.px, ZP), 142, { sc: 1.25 });
     this.booms.draw();
-    if (this.state === 'melt') { if (blink(this.t, 6)) rect(0, 0, W, PH, 'R'); text('MELTDOWN!', W / 2, 80, 'w', 'center'); }
-    else if (this.state === 'core' && blink(this.t, 2)) text('HIT THE CORE', W / 2, 60, 'y', 'center');
+    if (this.state === 'boom') { if (blink(this.t, 8)) rect(0, 0, W, PF, 'w'); text('CRITICAL MASS', 160, 80, 'r', 'center'); }
+    if (this.state === 'won') text('REACTOR IS CRITICAL - RUN!', 160, 80, 'k', 'center');
+    if (this.state === 'nodisc') text('OUT OF DISCS - FIGHT BACK IN', 160, 80, 'k', 'center');
+  };
+  Reactor.prototype.hud = function () {
+    const k = this.k;
+    text('DISCS', 0, row(0), 'G');
+    for (let i = 0; i < Math.min(12, k.discs); i++) ell(52 + i * 12, row(0) + 3.5, 3.6, 1.6, 'L');
+    text('ROBOTS ' + this.robotsLeft, 0, row(2), 'o');
+    if (this.etcm !== null) { text('ETCM', 224, row(1), 'R'); text(clock(this.etcm), 320, row(2), blink(this.t, 2) ? 'R' : 'w', 'right'); }
+    k.aircraftRow(4, true);
   };
 
-  const LEVELS = { hangar: Hangar, flight: Flight, silo: Silo, kremlin: Kremlin, reactor: Reactor };
-  Classic.LEVELS = LEVELS;
+  /* =====================================================================
+     SEQUENCE VII — the final chapter
+     ===================================================================== */
+  function Ending(k, ok, pilots) {
+    this.k = k; this.ok = ok; this.pilots = pilots; this.t = 0; this.booms = new Booms();
+    this.isEnding = true; this.timed = false;
+    if (ok) k.addScore(25000 + pilots * 5000);
+    A.engine(false);
+    if (ok) A.music('victory');
+  }
+  Ending.prototype.update = function (dt, I) {
+    this.t += dt;
+    this.booms.update(dt);
+    if (this.t < 2.5 && Math.random() < dt * 8) { this.booms.add(160 + rnd(-30, 30), 92 - rnd(0, 18), rnd(1, 2.6)); A.sfx('boom'); }
+    if (this.t > 4 && (I.hit('fire') || I.hit('start'))) { this.k.scr = 'title'; this.k.t = 0; A.music('title'); }
+  };
+  Ending.prototype.auto = function () { return {}; };
+  Ending.prototype.draw = function () {
+    rect(0, 0, W, 96, 'L');
+    rect(0, 96, W, 64, 'd');
+    for (const [x, y, s] of [[40, 20, 1], [120, 34, 0.7], [220, 16, 1.2], [280, 40, 0.8], [180, 52, 0.6]]) {
+      const cx2 = ((x + this.t * 6) % 340) - 10;
+      ell(cx2, y, 12 * s, 4 * s, 'w'); ell(cx2 + 7 * s, y - 3 * s, 7 * s, 4 * s, 'w'); ell(cx2 - 2 * s, y + 1 * s, 9 * s, 3 * s, this.ok ? 'l' : 'm');
+    }
+    for (let x = 60; x < 260; x += 3) { const h = 2 + ((x * 7) % 5) + (Math.abs(x - 160) < 30 ? 4 : 0); rect(x, 96 - h, 3, h, 'k'); }
+    this.booms.draw();
+    if (this.ok && this.t > 2.5) {
+      const f = Math.min(1, (this.t - 2.5) / 6);
+      const x = 40 + f * 240;
+      blit(topPlane('k'), x, 18 - f * 6, { rot: Math.PI / 2, sc: 1.1 });
+      ell(x, 130 - f * 10, 9, 2.4, 'k');
+    }
+  };
+  Ending.prototype.hud = function () {
+    const k = this.k;
+    text('AP/UPI - IN HEAVY FIGHTING TODAY U.S.', 0, row(0), 'w');
+    if (this.ok) {
+      text('COMMANDOS DESTROYED THE SOVIET', 0, row(1), 'w');
+      text('DEFENSE CENTER IN MOSCOW', 0, row(2), 'w');
+      text(this.pilots + ' PILOTS RETURNED SAFELY', 16, row(3), 'y');
+    } else {
+      text('COMMANDOS DESTROYED THE DEFENSE', 0, row(1), 'w');
+      text('CENTER. NO SURVIVORS WERE FOUND.', 0, row(2), 'w');
+      text('WE WILL NOTIFY YOUR FAMILY', 16, row(3), 'R');
+    }
+    text('SCORE:', 208, row(4), 'C'); text(pad(k.score, 6), 320, row(4), 'w', 'right');
+    if (this.t > 4 && blink(this.t, 1.4)) text('FIRE', 0, row(4), 'G');
+  };
+
+  Classic.SEQ = { Sac, Hangar, Run, Silo, Center, Reactor, Ending };
 })();

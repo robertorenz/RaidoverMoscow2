@@ -1,7 +1,7 @@
 /* Headless campaign simulator: plays the whole game on autopilot against a
    mock canvas to verify stage flow and catch runtime errors.
    usage: node tools/simulate.js [difficulty 0-2] [god 0/1] [mission 0-4] [phase]
-          node tools/simulate.js classic [skill 0-2] [god 0/1]   (1984 mode) */
+          node tools/simulate.js classic [level 0-2] [god 0/1] [start: sac|hangar|run|silo|center|reactor]   (1984 mode) */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -70,28 +70,29 @@ console.log(log.join('\n'));
 console.log(`final state=${G.state} t=${t.toFixed(0)}s score=${G.campaign.score} deaths=${deaths} cities lost=${40 - G.campaign.cities.length}`);
 
 function runClassic() {
-  G.startClassic({ god: process.argv[4] === '1' });
+  G.startClassic({ god: process.argv[4] === '1', level: process.argv[5] });
   const K = G.stage;
-  K.skill = parseInt(process.argv[3] || '1', 10);
+  K.lvl = parseInt(process.argv[3] || '0', 10);
   G.autoplay = true;
   const dt = 1 / 60;
-  let t = 0, key = '', phaseT = 0, deaths = 0;
+  let t = 0, key = '', phaseT = 0, deaths = 0, started = false;
   const out = [];
-  const die = K.die.bind(K);
-  K.die = (g) => { deaths++; out.push(`  x died in ${K.levelName} t=${t.toFixed(1)}`); die(g); };
+  for (const m of ['planeLost', 'hangarCrash']) {
+    const f = K[m].bind(K);
+    K[m] = (...a) => { deaths++; out.push(`  x ${m} in ${K.seq && K.seq.constructor.name} t=${t.toFixed(1)}`); return f(...a); };
+  }
   while (t < 3600) {
-    if (K.scr === 'title') { K.newGame(); K.planes = 60; K.cities = Array(30).fill('TESTVILLE'); K.scr = 'map'; }
-    if (K.scr === 'map') { K.after = 'flight'; K.startLevel('hangar'); }
-    if (K.scr === 'over' || K.scr === 'win') break;
+    if (K.scr === 'over' || (K.seq && K.seq.isEnding && phaseT > 2)) break;
     G.update(dt);
+    if (!started && K.scr === 'play') { started = true; K.station = 9; K.maxImpacts = 99; if (process.argv[5]) K.men = 9; }
     while (pending.length) pending.shift()();
     if (Math.round(t * 60) % 20 === 0) G.draw(ctx);
-    const k2 = K.target + ':' + (K.scr === 'level' ? K.levelName : K.scr);
-    if (K.scr === 'level' && k2 !== key) { out.push(`[${t.toFixed(1)}s] ${K.tgt().name} -> ${K.levelName} (score ${K.score})`); key = k2; phaseT = 0; }
+    const k2 = K.scr + ':' + (K.seq ? K.seq.constructor.name + (K.seq.mode ? '/' + K.seq.mode : '') : '') + ':' + K.siteName();
+    if (k2 !== key) { out.push(`[${t.toFixed(1)}s] ${k2} (score ${K.score || 0})`); key = k2; phaseT = 0; }
     phaseT += dt;
-    if (phaseT > 600) { out.push('!! stuck in ' + k2); break; }
+    if (phaseT > 400) { out.push('!! stuck in ' + k2); break; }
     t += dt;
   }
   console.log(out.join('\n'));
-  console.log(`classic final scr=${K.scr} t=${t.toFixed(0)}s score=${K.score} deaths=${deaths} cities lost=${30 - K.cities.length}`);
+  console.log(`classic final scr=${K.scr} seq=${K.seq && K.seq.constructor.name} ok=${K.seq && K.seq.ok} t=${t.toFixed(0)}s score=${K.score} deaths=${deaths} impacts=${K.impacts}`);
 }
